@@ -1,0 +1,54 @@
+name: Créer une release à chaque nouvelle version
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Extraire la version du plugin
+        id: get_version
+        run: |
+          VERSION=$(grep "Version:" auto-seo.php | awk '{print $NF}')
+          echo "plugin_version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Extraire le changelog depuis readme.txt
+        id: get_changelog
+        run: |
+          VERSION="${{ steps.get_version.outputs.plugin_version }}"
+          # On cherche la ligne "= 0.3 =" et on prend tout jusqu'au prochain "= " ou la fin
+          # On utilise sed pour extraire le bloc de texte entre les versions
+          CHANGELOG=$(sed -n "/= $VERSION =/,/= /p" readme.txt | grep -v "= " | sed '/^$/d')
+          
+          # On prépare le texte pour GitHub Actions (gestion des retours à la ligne)
+          echo "changelog_text<<EOF" >> $GITHUB_ENV
+          echo "$CHANGELOG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Créer l'archive ZIP
+        run: |
+          FILE_NAME="auto-seo_v${{ steps.get_version.outputs.plugin_version }}.zip"
+          # On ajoute .idea/* à la liste des éléments à ignorer
+          zip -r "$FILE_NAME" . -x "*.git*" ".github/*" ".idea/*"
+          echo "zip_file=$FILE_NAME" >> $GITHUB_ENV
+
+      - name: Créer la release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.plugin_version }}
+          name: Version ${{ steps.get_version.outputs.plugin_version }}
+          body: |
+            ## Nouveautés de la version ${{ steps.get_version.outputs.plugin_version }}
+            ${{ env.changelog_text }}
+          files: ${{ env.zip_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
