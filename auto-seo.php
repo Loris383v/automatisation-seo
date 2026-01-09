@@ -1,10 +1,12 @@
 <?php
 /**
  * Plugin Name: SEO Automatique
+ * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.1
+ * Version: 0.3
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
+ * Requires Plugins: wordpress-seo
  */
 
 if (!defined('ABSPATH')) exit; // Sécurité : pas d'accès direct
@@ -40,40 +42,58 @@ add_action('admin_menu', function() {
  *Interface page
  */
 function auto_seo_render_page() {
-	// nonce pour sécuriser l'AJAX
-	$nonce = wp_create_nonce('auto_seo_security_token');
-    // On s'assure que les fonctions nécessaires pour la checklist sont chargées
+    $nonce = wp_create_nonce('auto_seo_security_token');
     if ( ! function_exists( 'wp_terms_checklist' ) ) {
         require_once ABSPATH . 'wp-admin/includes/template.php';
     }
     ?>
     <div class="wrap">
-        <h1>Auto SEO UwU</h1>
+        <h1>Auto SEO</h1>
 
-        <div style="margin-bottom: 20px; background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 5px;">
-            <div style="margin-bottom: 15px;">
-                <label style="font-weight: bold; font-size: 1.1em; cursor: pointer;">
-                    <input type="checkbox" id="toggle-filter" style="transform: scale(1.2); margin-right: 10px;">
-                    Activer le filtrage par catégorie
-                </label>
-            </div>
+        <div style="display: flex; gap: 20px; margin-bottom: 20px;">
+            <div style="flex: 1; background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 5px;">
+                <h3>Filtrage des catégories</h3>
 
-            <div id="filter-container" style="display: none; border-top: 1px solid #eee; padding-top: 15px;">
-                <div style="margin-bottom: 10px;">
-                    <button type="button" id="select-all-cats" class="button button-secondary">Tout sélectionner</button>
-                    <button type="button" id="deselect-all-cats" class="button button-secondary">Tout désélectionner</button>
+                <div style="margin-bottom: 20px;">
+                    <label style="font-weight: bold; cursor: pointer;">
+                        <input type="checkbox" id="toggle-whitelist" style="margin-right: 10px;">
+                        Liste blanche (modifie uniquement les articles des catégories sélectionnées)
+                    </label>
+                    <div id="whitelist-container" style="display: none; margin-top: 10px;">
+                        <button type="button" class="button button-secondary select-all" data-target="whitelist-checklist">Tout sélectionner</button>
+                        <button type="button" class="button button-secondary deselect-all" data-target="whitelist-checklist">Tout désélectionner</button>
+                        <div class="cat-list-wrapper">
+                            <ul id="whitelist-checklist">
+                                <?php wp_terms_checklist( 0, array( 'taxonomy' => 'category' ) ); ?>
+                            </ul>
+                        </div>
+                    </div>
                 </div>
 
-                <div style="max-height: 250px; overflow-y: auto; background: #f9f9f9; padding: 10px; border: 1px solid #ddd;">
-                    <ul id="cat-checklist">
-                        <?php
-                        // affiche la liste des catégories
-                        wp_terms_checklist( 0, array( 'taxonomy' => 'category' ) );
-                        ?>
-                    </ul>
+                <hr>
+
+                <div style="margin-top: 20px;">
+                    <label style="font-weight: bold; cursor: pointer;">
+                        <input type="checkbox" id="toggle-blacklist" style="margin-right: 10px;">
+                        Liste noire (ne va pas modifier les articles des catégories sélectionnées)
+                    </label>
+                    <div id="blacklist-container" style="display: none; margin-top: 10px;">
+                        <button type="button" class="button button-secondary select-all" data-target="blacklist-checklist">Tout sélectionner</button>
+                        <button type="button" class="button button-secondary deselect-all" data-target="blacklist-checklist">Tout désélectionner</button>
+                        <div class="cat-list-wrapper">
+                            <ul id="blacklist-checklist">
+                                <?php wp_terms_checklist( 0, array( 'taxonomy' => 'category' ) ); ?>
+                            </ul>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <p class="description">Si désactivé, tous les articles seront traités. Les champs déjà remplis ne seront jamais écrasés.</p>
+
+            <div style="width: 300px; background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 5px; align-self: flex-start;">
+                <h3>Options</h3>
+                <p><label><input type="checkbox" id="overwrite-desc"> Écraser la méta description existante</label></p>
+                <p><label><input type="checkbox" id="overwrite-kw"> Écraser l'expression clé existante</label></p>
+            </div>
         </div>
 
         <div id="seo-bar-container" style="width:100%; background:#ddd; border-radius:10px; overflow:hidden; margin:20px 0;">
@@ -84,48 +104,46 @@ function auto_seo_render_page() {
     </div>
 
     <style>
-        #cat-checklist ul { margin-left: 20px; margin-top: 5px; }
-        #cat-checklist li { margin-bottom: 5px; }
+        .cat-list-wrapper { max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; margin-top: 10px; }
+        .cat-list-wrapper ul { margin-left: 20px; }
+        .cat-list-wrapper li { margin-bottom: 5px; }
     </style>
 
     <script>
         jQuery(document).ready(function($) {
-            // Gestion du Toggle
-            $('#toggle-filter').change(function() {
-                $('#filter-container').slideToggle($(this).is(':checked'));
-            });
+            // Gestion des toggles
+            $('#toggle-whitelist').change(function() { $('#whitelist-container').slideToggle($(this).is(':checked')); });
+            $('#toggle-blacklist').change(function() { $('#blacklist-container').slideToggle($(this).is(':checked')); });
 
             // Sélection globale
-            $('#select-all-cats').click(function() {
-                $('#cat-checklist input[type="checkbox"]').prop('checked', true);
+            $('.select-all').click(function() {
+                $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', true);
             });
-            $('#deselect-all-cats').click(function() {
-                $('#cat-checklist input[type="checkbox"]').prop('checked', false);
+            $('.deselect-all').click(function() {
+                $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', false);
             });
 
             $('#start-btn').click(function() {
                 const $btn = $(this);
-                const isFilterActive = $('#toggle-filter').is(':checked');
+                const overwriteDesc = $('#overwrite-desc').is(':checked');
+                const overwriteKW = $('#overwrite-kw').is(':checked');
 
-                // On récupère les IDs des catégories cochées
-                let selectedCats = [];
-                if (isFilterActive) {
-                    $('#cat-checklist input:checked').each(function() {
-                        selectedCats.push($(this).val());
-                    });
-
-                    if (selectedCats.length === 0) {
-                        alert('Choisissez au moins une catégorie ou désactivez le filtre !');
-                        return;
-                    }
+                let whitelist = [];
+                if ($('#toggle-whitelist').is(':checked')) {
+                    $('#whitelist-checklist input:checked').each(function() { whitelist.push($(this).val()); });
                 }
 
-                $btn.prop('disabled', true).text('Traitement...');
+                let blacklist = [];
+                if ($('#toggle-blacklist').is(':checked')) {
+                    $('#blacklist-checklist input:checked').each(function() { blacklist.push($(this).val()); });
+                }
+
+                $btn.prop('disabled', true).text('Recherche des articles...');
 
                 $.post(ajaxurl, {
                     action: 'seo_get_ids',
-                    category_ids: selectedCats,
-                    filter_active: isFilterActive,
+                    whitelist: whitelist,
+                    blacklist: blacklist,
                     security: '<?php echo $nonce; ?>'
                 }, function(res) {
                     if(res.success) {
@@ -133,35 +151,38 @@ function auto_seo_render_page() {
                         let total = ids.length;
                         $('#total').text(total);
                         if(total > 0) {
-                            processNext(ids, 0, total);
+                            $btn.text('Traitement en cours...');
+                            processNext(ids, 0, total, overwriteDesc, overwriteKW);
                         } else {
-                            $btn.prop('disabled', false).text('Rien à faire ! OwO');
+                            $btn.prop('disabled', false).text('Aucun article trouvé');
                         }
                     }
                 });
             });
 
-            function processNext(ids, index, total) {
+            function processNext(ids, index, total, overwriteDesc, overwriteKW) {
                 if(index >= total) {
-                    $('#start-btn').prop('disabled', false).text('Terminé ! UwU');
+                    $('#start-btn').prop('disabled', false).text('Optimisation terminée !');
                     return;
                 }
 
                 $.post(ajaxurl, {
                     action: 'seo_process_item',
                     post_id: ids[index],
+                    overwrite_desc: overwriteDesc,
+                    overwrite_kw: overwriteKW,
                     security: '<?php echo $nonce; ?>'
                 }, function() {
                     let current = index + 1;
                     let percent = Math.round((current / total) * 100);
                     $('#seo-bar-fill').css('width', percent+'%').text(percent+'%');
                     $('#current').text(current);
-                    processNext(ids, current, total);
+                    processNext(ids, current, total, overwriteDesc, overwriteKW);
                 });
             }
         });
     </script>
-	<?php
+    <?php
 }
 
 /**
@@ -169,7 +190,7 @@ function auto_seo_render_page() {
  */
 add_action('wp_ajax_seo_get_ids', function() {
     check_ajax_referer('auto_seo_security_token', 'security');
-    if (!current_user_can('manage_options')) wp_die('Interdit !');
+    if (!current_user_can('manage_options')) wp_die();
 
     $args = [
             'post_type' => 'post',
@@ -177,9 +198,14 @@ add_action('wp_ajax_seo_get_ids', function() {
             'fields' => 'ids'
     ];
 
-    // Si le filtre est actif et qu'on a des catégories
-    if ($_POST['filter_active'] === 'true' && !empty($_POST['category_ids'])) {
-        $args['category__in'] = array_map('intval', $_POST['category_ids']);
+    // Gestion de la Whitelist
+    if (!empty($_POST['whitelist'])) {
+        $args['category__in'] = array_map('intval', $_POST['whitelist']);
+    }
+
+    // Gestion de la Blacklist
+    if (!empty($_POST['blacklist'])) {
+        $args['category__not_in'] = array_map('intval', $_POST['blacklist']);
     }
 
     $ids = get_posts($args);
@@ -187,32 +213,34 @@ add_action('wp_ajax_seo_get_ids', function() {
 });
 
 /**
- * tratiement de l'article
+ * traitement de chaque article
  */
 add_action('wp_ajax_seo_process_item', function() {
     check_ajax_referer('auto_seo_security_token', 'security');
-    if (!current_user_can('manage_options')) wp_die('Interdit !');
+    if (!current_user_can('manage_options')) wp_die();
 
     $post_id = intval($_POST['post_id']);
+    $overwrite_desc = $_POST['overwrite_desc'] === 'true';
+    $overwrite_kw = $_POST['overwrite_kw'] === 'true';
+
     $post = get_post($post_id);
+    if (!$post) wp_send_json_error();
 
-    if ($post) {
-        $titre = get_the_title($post_id);
+    $titre = get_the_title($post_id);
 
-        // Description Yoast
-        $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
-        if (empty($current_desc)) {
-            $excerpt = wp_trim_words($post->post_content, 15, '...');
-            $meta = "$titre | $excerpt";
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta);
-        }
+    // Méta Description
+    $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
+    if ($overwrite_desc || empty($current_desc)) {
+        $excerpt = wp_trim_words($post->post_content, 15, '...');
+        $meta = "$titre | $excerpt";
+        update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta);
+    }
 
-        // Expression clé Yoast
-        $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
-        if (empty($current_kw)) {
-            $focus_kw = wp_trim_words($titre, 8, ''); // Limite à 8 mots UwU
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', $focus_kw);
-        }
+    // Expression clé
+    $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
+    if ($overwrite_kw || empty($current_kw)) {
+        $focus_kw = wp_trim_words($titre, 8, '');
+        update_post_meta($post_id, '_yoast_wpseo_focuskw', $focus_kw);
     }
 
     wp_send_json_success();
