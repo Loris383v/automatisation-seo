@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 0.3
+ * Version: 0.4
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -28,14 +28,15 @@ function auto_seo_check_dependency() {
  * Menu dans l'interface admin
  */
 add_action('admin_menu', function() {
-	add_submenu_page(
-		'edit.php',
-		'SEO Automatique',
-		'Auto SEO',
-		'manage_options', // Seuls les admins peuvent le voir
-		'auto-seo',
-		'auto_seo_render_page'
-	);
+    add_menu_page(
+            'SEO Automatique',
+            'Auto SEO',
+            'manage_options',
+            'auto-seo',
+            'auto_seo_render_page',
+            'dashicons-chart-line',
+            26
+    );
 });
 
 /**
@@ -53,11 +54,10 @@ function auto_seo_render_page() {
         <div style="display: flex; gap: 20px; margin-bottom: 20px;">
             <div style="flex: 1; background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 5px;">
                 <h3>Filtrage des catégories</h3>
-
                 <div style="margin-bottom: 20px;">
                     <label style="font-weight: bold; cursor: pointer;">
                         <input type="checkbox" id="toggle-whitelist" style="margin-right: 10px;">
-                        Liste blanche (modifie uniquement les articles des catégories sélectionnées)
+                        Liste blanche (uniquement les catégories sélectionnées)
                     </label>
                     <div id="whitelist-container" style="display: none; margin-top: 10px;">
                         <button type="button" class="button button-secondary select-all" data-target="whitelist-checklist">Tout sélectionner</button>
@@ -69,13 +69,11 @@ function auto_seo_render_page() {
                         </div>
                     </div>
                 </div>
-
                 <hr>
-
                 <div style="margin-top: 20px;">
                     <label style="font-weight: bold; cursor: pointer;">
                         <input type="checkbox" id="toggle-blacklist" style="margin-right: 10px;">
-                        Liste noire (ne va pas modifier les articles des catégories sélectionnées)
+                        Liste noire (exclure les catégories sélectionnées)
                     </label>
                     <div id="blacklist-container" style="display: none; margin-top: 10px;">
                         <button type="button" class="button button-secondary select-all" data-target="blacklist-checklist">Tout sélectionner</button>
@@ -90,16 +88,27 @@ function auto_seo_render_page() {
             </div>
 
             <div style="width: 300px; background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 5px; align-self: flex-start;">
+                <h3>Types de contenu</h3>
+                <p><label><input type="checkbox" id="process-posts" checked> Articles (posts)</label></p>
+                <p><label><input type="checkbox" id="process-pages"> Pages</label></p>
+                <hr>
                 <h3>Options</h3>
-                <p><label><input type="checkbox" id="overwrite-desc"> Écraser la méta description existante</label></p>
-                <p><label><input type="checkbox" id="overwrite-kw"> Écraser l'expression clé existante</label></p>
+                <p><label><input type="checkbox" id="overwrite-desc"> Écraser la méta description</label></p>
+                <p><label><input type="checkbox" id="overwrite-kw"> Écraser l'expression clé</label></p>
             </div>
         </div>
 
         <div id="seo-bar-container" style="width:100%; background:#ddd; border-radius:10px; overflow:hidden; margin:20px 0;">
             <div id="seo-bar-fill" style="width:0%; height:30px; background:#2271b1; color:white; text-align:center; line-height:30px; transition: width 0.3s;">0%</div>
         </div>
-        <p id="seo-stats">Articles traités : <span id="current">0</span> / <span id="total">0</span></p>
+
+        <p id="seo-stats">Progression : <span id="current">0</span> / <span id="total">0</span></p>
+
+        <div id="seo-log" style="display:none; background: #e7f7ed; border: 1px solid #46b450; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+            <h3 style="margin-top:0;">Résultat de l'optimisation</h3>
+            <div id="log-summary"></div>
+        </div>
+
         <button id="start-btn" class="button button-primary button-large">Lancer l'optimisation</button>
     </div>
 
@@ -107,26 +116,35 @@ function auto_seo_render_page() {
         .cat-list-wrapper { max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; margin-top: 10px; }
         .cat-list-wrapper ul { margin-left: 20px; }
         .cat-list-wrapper li { margin-bottom: 5px; }
+        #log-summary p { margin: 5px 0; }
     </style>
 
     <script>
         jQuery(document).ready(function($) {
-            // Gestion des toggles
+            let stats = {
+                post: { updated: 0, skipped: 0 },
+                page: { updated: 0, skipped: 0 }
+            };
+
             $('#toggle-whitelist').change(function() { $('#whitelist-container').slideToggle($(this).is(':checked')); });
             $('#toggle-blacklist').change(function() { $('#blacklist-container').slideToggle($(this).is(':checked')); });
 
-            // Sélection globale
-            $('.select-all').click(function() {
-                $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', true);
-            });
-            $('.deselect-all').click(function() {
-                $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', false);
-            });
+            $('.select-all').click(function() { $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', true); });
+            $('.deselect-all').click(function() { $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', false); });
 
             $('#start-btn').click(function() {
                 const $btn = $(this);
                 const overwriteDesc = $('#overwrite-desc').is(':checked');
                 const overwriteKW = $('#overwrite-kw').is(':checked');
+
+                let postTypes = [];
+                if ($('#process-posts').is(':checked')) postTypes.push('post');
+                if ($('#process-pages').is(':checked')) postTypes.push('page');
+
+                if (postTypes.length === 0) {
+                    alert('Sélectionnez au moins un type de contenu !');
+                    return;
+                }
 
                 let whitelist = [];
                 if ($('#toggle-whitelist').is(':checked')) {
@@ -138,10 +156,16 @@ function auto_seo_render_page() {
                     $('#blacklist-checklist input:checked').each(function() { blacklist.push($(this).val()); });
                 }
 
-                $btn.prop('disabled', true).text('Recherche des articles...');
+                $btn.prop('disabled', true).text('Recherche...');
+                $('#seo-log').hide();
+
+                // Reset stats
+                stats.post.updated = 0; stats.post.skipped = 0;
+                stats.page.updated = 0; stats.page.skipped = 0;
 
                 $.post(ajaxurl, {
                     action: 'seo_get_ids',
+                    post_types: postTypes,
                     whitelist: whitelist,
                     blacklist: blacklist,
                     security: '<?php echo $nonce; ?>'
@@ -154,7 +178,7 @@ function auto_seo_render_page() {
                             $btn.text('Traitement en cours...');
                             processNext(ids, 0, total, overwriteDesc, overwriteKW);
                         } else {
-                            $btn.prop('disabled', false).text('Aucun article trouvé');
+                            $btn.prop('disabled', false).text('Aucun contenu trouvé');
                         }
                     }
                 });
@@ -162,7 +186,19 @@ function auto_seo_render_page() {
 
             function processNext(ids, index, total, overwriteDesc, overwriteKW) {
                 if(index >= total) {
-                    $('#start-btn').prop('disabled', false).text('Optimisation terminée !');
+                    $('#start-btn').prop('disabled', false).text('Recommencer');
+
+                    let summaryHtml = '<p><strong>' + total + '</strong> éléments vérifiés au total.</p><hr>';
+
+                    if (stats.post.updated > 0 || stats.post.skipped > 0) {
+                        summaryHtml += '<p>📝 <strong>Articles :</strong> ' + stats.post.updated + ' mis à jour, ' + stats.post.skipped + ' ignorés.</p>';
+                    }
+                    if (stats.page.updated > 0 || stats.page.skipped > 0) {
+                        summaryHtml += '<p>📄 <strong>Pages :</strong> ' + stats.page.updated + ' mises à jour, ' + stats.page.skipped + ' ignorées.</p>';
+                    }
+
+                    $('#log-summary').html(summaryHtml);
+                    $('#seo-log').fadeIn();
                     return;
                 }
 
@@ -172,7 +208,16 @@ function auto_seo_render_page() {
                     overwrite_desc: overwriteDesc,
                     overwrite_kw: overwriteKW,
                     security: '<?php echo $nonce; ?>'
-                }, function() {
+                }, function(res) {
+                    if(res.success) {
+                        const type = res.data.post_type; // 'post' ou 'page'
+                        if(res.data.status === 'updated') {
+                            stats[type].updated++;
+                        } else {
+                            stats[type].skipped++;
+                        }
+                    }
+
                     let current = index + 1;
                     let percent = Math.round((current / total) * 100);
                     $('#seo-bar-fill').css('width', percent+'%').text(percent+'%');
@@ -186,34 +231,29 @@ function auto_seo_render_page() {
 }
 
 /**
- * Récup des ID
+ * Récupération des IDs
  */
 add_action('wp_ajax_seo_get_ids', function() {
     check_ajax_referer('auto_seo_security_token', 'security');
     if (!current_user_can('manage_options')) wp_die();
 
+    $post_types = !empty($_POST['post_types']) ? array_map('sanitize_key', $_POST['post_types']) : ['post'];
+
     $args = [
-            'post_type' => 'post',
+            'post_type' => $post_types,
             'posts_per_page' => -1,
             'fields' => 'ids'
     ];
 
-    // Gestion de la Whitelist
-    if (!empty($_POST['whitelist'])) {
-        $args['category__in'] = array_map('intval', $_POST['whitelist']);
-    }
-
-    // Gestion de la Blacklist
-    if (!empty($_POST['blacklist'])) {
-        $args['category__not_in'] = array_map('intval', $_POST['blacklist']);
-    }
+    if (!empty($_POST['whitelist'])) $args['category__in'] = array_map('intval', $_POST['whitelist']);
+    if (!empty($_POST['blacklist'])) $args['category__not_in'] = array_map('intval', $_POST['blacklist']);
 
     $ids = get_posts($args);
     wp_send_json_success($ids);
 });
 
 /**
- * traitement de chaque article
+ * Traitement avec retour de type et de statut
  */
 add_action('wp_ajax_seo_process_item', function() {
     check_ajax_referer('auto_seo_security_token', 'security');
@@ -227,6 +267,7 @@ add_action('wp_ajax_seo_process_item', function() {
     if (!$post) wp_send_json_error();
 
     $titre = get_the_title($post_id);
+    $updated = false;
 
     // Méta Description
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
@@ -234,6 +275,7 @@ add_action('wp_ajax_seo_process_item', function() {
         $excerpt = wp_trim_words($post->post_content, 15, '...');
         $meta = "$titre | $excerpt";
         update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta);
+        $updated = true;
     }
 
     // Expression clé
@@ -241,7 +283,12 @@ add_action('wp_ajax_seo_process_item', function() {
     if ($overwrite_kw || empty($current_kw)) {
         $focus_kw = wp_trim_words($titre, 8, '');
         update_post_meta($post_id, '_yoast_wpseo_focuskw', $focus_kw);
+        $updated = true;
     }
 
-    wp_send_json_success();
+    // On renvoie le post_type pour le log différencié
+    wp_send_json_success([
+            'status' => $updated ? 'updated' : 'skipped',
+            'post_type' => $post->post_type
+    ]);
 });

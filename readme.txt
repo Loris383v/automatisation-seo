@@ -8,6 +8,11 @@ Les champs qui étaient déjà remplis ne seront pas modifiés, pour éviter d'�
 
 == Changelog ==
 
+= 0.4 =
+* [Nouveau] : Prise en charge des pages, choix sur le type de contenu à traiter.
+* [Nouveau] : Informations sur les contenus modifiés/ignorés après exécution.
+* [Amélioration] : Déplacement dans un menu principal au lieu d'un sous-menu d'Articles, maintenant que l'extension gère aussi les pages.
+
 = 0.3 =
 * [Nouveau] : Activer/désactiver la protection des champs déjà remplis.
 * [Nouveau] : Liste noire des catégories en complément pour un filtrage plus précis.
