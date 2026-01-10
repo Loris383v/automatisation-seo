@@ -1,12 +1,20 @@
-Cette extension permet de générer automatiquement les méta-descriptions et les expressions clés de tous vos articles !
-Elle prend le titre de l'article en tant qu'expression clé, et les 15 premiers mots de l'article pour la méta-description.
+Cette extension permet de générer automatiquement les méta-descriptions et les expressions clés de tous vos articles et pages!
+Elle prend le titre de l'article en tant qu'expression clé, et les 15 premiers mots de l'article pour la méta-description (pas encore configurable).
 
 Il est possible de filtrer pour modifier uniquement les articles appartenant à certaines catégories.
 
-Les champs qui étaient déjà remplis ne seront pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
+Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 
 
 == Changelog ==
+
+= 1.0 =
+/!\ Non testée /!\
+* [Nouveau] : Remplissage automatique lors de la publication d'un nouvel article ou d'une page.
+* [Nouveau] : Page de réglages pour activer/désactiver l'automatisation à la volée.
+* [Nouveau] : Choix des types de contenu (articles/pages) pour l'automatisation.
+* [Amélioration] : Restructuration du menu avec deux sous menus.
+* [Amélioration] : Ajout d'un lien direct vers les réglages depuis la liste des extensions.
 
 = 0.4 =
 * [Nouveau] : Prise en charge des pages, choix sur le type de contenu à traiter.
