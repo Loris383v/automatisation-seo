@@ -8,8 +8,11 @@ Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour
 
 == Changelog ==
 
+= 1.0.1 =
+* [Correctif] : Les champs ne se remplissaient pas automatiquement lors de la publication/mise à jour d'un article ou d'une page.
+* [Amélioration] : Logs après optimisation un peu plus verbeux.
+
 = 1.0 =
-/!\ Non testée /!\
 * [Nouveau] : Remplissage automatique lors de la publication d'un nouvel article ou d'une page.
 * [Nouveau] : Page de réglages pour activer/désactiver l'automatisation à la volée.
 * [Nouveau] : Choix des types de contenu (articles/pages) pour l'automatisation.

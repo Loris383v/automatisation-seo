@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.0
+ * Version: 1.0.1
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -11,7 +11,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-// pas vraiment utile, normalement wordpress gere ça tout seul mais bon ça coute rien de le laisser ça rajoute une ptite couche de protection en pls
+// Vérification de la dépendance à l'activation
 register_activation_hook(__FILE__, 'auto_seo_check_dependency');
 
 function auto_seo_check_dependency() {
@@ -22,7 +22,7 @@ function auto_seo_check_dependency() {
 }
 
 /**
- * lien poura accéder aux réglages
+ * Lien vers les réglages dans la liste des extensions
  */
 add_filter('plugin_action_links_' . plugin_basename(__FILE__), function($links) {
     $settings_link = '<a href="admin.php?page=auto-seo-settings">' . __('Réglages') . '</a>';
@@ -34,7 +34,6 @@ add_filter('plugin_action_links_' . plugin_basename(__FILE__), function($links) 
  * Menu et Sous-menus
  */
 add_action('admin_menu', function() {
-    // Menu principal
     add_menu_page(
             'SEO Automatique',
             'Auto SEO',
@@ -45,7 +44,6 @@ add_action('admin_menu', function() {
             26
     );
 
-    // sous-menu Optimiser (par défaut)
     add_submenu_page(
             'auto-seo',
             'Optimiser',
@@ -55,7 +53,6 @@ add_action('admin_menu', function() {
             'auto_seo_render_page'
     );
 
-    // sous-menu Réglages
     add_submenu_page(
             'auto-seo',
             'Réglages',
@@ -75,7 +72,7 @@ function auto_seo_render_settings_page() {
 
         $settings = [
                 'enabled'        => isset($_POST['enabled']) ? 1 : 0,
-                'post_types'     => isset($_POST['post_types']) ? $_POST['post_types'] : [],
+                'post_types'     => isset($_POST['post_types']) ? (array)$_POST['post_types'] : [],
                 'fill_desc'      => isset($_POST['fill_desc']) ? 1 : 0,
                 'overwrite_desc' => isset($_POST['overwrite_desc']) ? 1 : 0,
                 'fill_kw'        => isset($_POST['fill_kw']) ? 1 : 0,
@@ -104,7 +101,7 @@ function auto_seo_render_settings_page() {
                     <th scope="row">Activer l'automatisation</th>
                     <td>
                         <label><input type="checkbox" name="enabled" value="1" <?php checked($options['enabled'], 1); ?>>
-                            Générer les données SEO lors de la publication d'un nouveau contenu</label>
+                            Générer les données SEO lors de la publication ou de l'enregistrement</label>
                     </td>
                 </tr>
                 <tr>
@@ -136,34 +133,35 @@ function auto_seo_render_settings_page() {
 }
 
 /**
- * Logique de publication automatique
+ * Logique de sauvegarde automatique (save_post / wp_after_insert_post)
  */
-add_action('transition_post_status', 'auto_seo_publish_trigger', 10, 3);
-function auto_seo_publish_trigger($new_status, $old_status, $post) {
-    if ($new_status !== 'publish' || $old_status === 'publish') return;
-
+add_action('wp_after_insert_post', 'auto_seo_after_save_trigger', 99, 3);
+function auto_seo_after_save_trigger($post_id, $post, $update) {
+    if (wp_is_post_autosave($post_id) || wp_is_post_revision($post_id)) return;
     $options = get_option('auto_seo_global_settings');
-    if (!$options || $options['enabled'] != 1) return;
-
+    if (!$options || empty($options['enabled'])) return;
     if (!in_array($post->post_type, (array)$options['post_types'])) return;
+    if (in_array($post->post_status, ['auto-draft', 'inherit'])) return;
 
-    $post_id = $post->ID;
-    $titre = get_the_title($post_id);
+    $titre = $post->post_title;
+    if (empty($titre)) return;
 
-    // Traitement Méta Description
-    if ($options['fill_desc']) {
-        $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
-        if ($options['overwrite_desc'] || empty($current_desc)) {
-            $excerpt = wp_trim_words($post->post_content, 15, '...');
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $excerpt");
-        }
-    }
-
-    // Traitement Expression clé
-    if ($options['fill_kw']) {
+    if (!empty($options['fill_kw'])) {
         $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
         if ($options['overwrite_kw'] || empty($current_kw)) {
             update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, 8, ''));
+        }
+    }
+
+    if (!empty($options['fill_desc'])) {
+        $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
+        if ($options['overwrite_desc'] || empty($current_desc)) {
+            $content = strip_shortcodes($post->post_content);
+            $content = wp_strip_all_tags($content);
+            $excerpt = wp_trim_words($content, 15, '...');
+            if (!empty($excerpt)) {
+                update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $excerpt");
+            }
         }
     }
 }
@@ -234,7 +232,12 @@ function auto_seo_render_page() {
     </style>
     <script>
         jQuery(document).ready(function($) {
-            let stats = { post: { updated: 0, skipped: 0 }, page: { updated: 0, skipped: 0 } };
+            // Stats détaillées par type
+            let stats = {
+                post: { checked: 0, updated: 0, desc: 0, kw: 0 },
+                page: { checked: 0, updated: 0, desc: 0, kw: 0 }
+            };
+
             $('#toggle-whitelist').change(function() { $('#whitelist-container').slideToggle($(this).is(':checked')); });
             $('#toggle-blacklist').change(function() { $('#blacklist-container').slideToggle($(this).is(':checked')); });
             $('.select-all').click(function() { $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', true); });
@@ -255,7 +258,12 @@ function auto_seo_render_page() {
 
                 $btn.prop('disabled', true).text('Recherche...');
                 $('#seo-log').hide();
-                stats.post.updated = 0; stats.post.skipped = 0; stats.page.updated = 0; stats.page.skipped = 0;
+
+                // Reset stats
+                stats = {
+                    post: { checked: 0, updated: 0, desc: 0, kw: 0 },
+                    page: { checked: 0, updated: 0, desc: 0, kw: 0 }
+                };
 
                 $.post(ajaxurl, {
                     action: 'seo_get_ids',
@@ -277,9 +285,21 @@ function auto_seo_render_page() {
             function processNext(ids, index, total, overwriteDesc, overwriteKW) {
                 if(index >= total) {
                     $('#start-btn').prop('disabled', false).text('Recommencer');
-                    let summaryHtml = '<p><strong>' + total + '</strong> éléments vérifiés.</p>';
-                    if (stats.post.updated > 0 || stats.post.skipped > 0) summaryHtml += '<p>📝 Articles : ' + stats.post.updated + ' mis à jour.</p>';
-                    if (stats.page.updated > 0 || stats.page.skipped > 0) summaryHtml += '<p>📄 Pages : ' + stats.page.updated + ' mises à jour.</p>';
+
+                    let summaryHtml = '<p><strong>' + total + ' éléments vérifiés.</strong></p>';
+
+                    ['post', 'page'].forEach(type => {
+                        if (stats[type].checked > 0) {
+                            let label = (type === 'post') ? 'Articles' : 'Pages';
+                            summaryHtml += '<div style="margin-top:10px;">';
+                            summaryHtml += '<strong>' + label + ' : ' + stats[type].updated + '/' + stats[type].checked + ' mis à jour</strong>';
+                            summaryHtml += '<ul style="margin: 5px 0 0 20px; list-style: disc;">';
+                            summaryHtml += '<li>' + stats[type].desc + ' méta descriptions écrites</li>';
+                            summaryHtml += '<li>' + stats[type].kw + ' expression clés écrites</li>';
+                            summaryHtml += '</ul></div>';
+                        }
+                    });
+
                     $('#log-summary').html(summaryHtml);
                     $('#seo-log').fadeIn();
                     return;
@@ -293,8 +313,10 @@ function auto_seo_render_page() {
                 }, function(res) {
                     if(res.success) {
                         const type = res.data.post_type;
-                        if(res.data.status === 'updated') stats[type].updated++;
-                        else stats[type].skipped++;
+                        stats[type].checked++;
+                        if(res.data.desc_updated) stats[type].desc++;
+                        if(res.data.kw_updated) stats[type].kw++;
+                        if(res.data.desc_updated || res.data.kw_updated) stats[type].updated++;
                     }
                     let current = index + 1;
                     let percent = Math.round((current / total) * 100);
@@ -309,13 +331,13 @@ function auto_seo_render_page() {
 }
 
 /**
- * AJAX Callbacks
+ * AJAX Callbacks pour l'optimisation de masse
  */
 add_action('wp_ajax_seo_get_ids', function() {
     check_ajax_referer('auto_seo_security_token', 'security');
     if (!current_user_can('manage_options')) wp_die();
     $post_types = !empty($_POST['post_types']) ? array_map('sanitize_key', $_POST['post_types']) : ['post'];
-    $args = ['post_type' => $post_types, 'posts_per_page' => -1, 'fields' => 'ids'];
+    $args = ['post_type' => $post_types, 'posts_per_page' => -1, 'fields' => 'ids', 'post_status' => 'any'];
     if (!empty($_POST['whitelist'])) $args['category__in'] = array_map('intval', $_POST['whitelist']);
     if (!empty($_POST['blacklist'])) $args['category__not_in'] = array_map('intval', $_POST['blacklist']);
     wp_send_json_success(get_posts($args));
@@ -329,18 +351,34 @@ add_action('wp_ajax_seo_process_item', function() {
     $overwrite_kw = $_POST['overwrite_kw'] === 'true';
     $post = get_post($post_id);
     if (!$post) wp_send_json_error();
-    $titre = get_the_title($post_id);
-    $updated = false;
 
+    $titre = get_the_title($post_id);
+    $desc_updated = false;
+    $kw_updated = false;
+
+    $content = strip_shortcodes($post->post_content);
+    $content = wp_strip_all_tags($content);
+
+    // Méta Description
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
     if ($overwrite_desc || empty($current_desc)) {
-        update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | " . wp_trim_words($post->post_content, 15, '...'));
-        $updated = true;
+        $excerpt = wp_trim_words($content, 15, '...');
+        if (!empty($excerpt)) {
+            update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $excerpt");
+            $desc_updated = true;
+        }
     }
+
+    // Expression clé
     $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
     if ($overwrite_kw || empty($current_kw)) {
         update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, 8, ''));
-        $updated = true;
+        $kw_updated = true;
     }
-    wp_send_json_success(['status' => $updated ? 'updated' : 'skipped', 'post_type' => $post->post_type]);
+
+    wp_send_json_success([
+            'desc_updated' => $desc_updated,
+            'kw_updated'   => $kw_updated,
+            'post_type'    => $post->post_type
+    ]);
 });
