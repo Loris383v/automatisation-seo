@@ -8,6 +8,9 @@ Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour
 
 == Changelog ==
 
+= 1.0.2 =
+* [Amélioration] : Réglages par défaut changés. (Automatisation lors de la publication -> Oui par défaut, pour les articles et les pages.)
+
 = 1.0.1 =
 * [Correctif] : Les champs ne se remplissaient pas automatiquement lors de la publication/mise à jour d'un article ou d'une page.
 * [Amélioration] : Logs après optimisation un peu plus verbeux.
