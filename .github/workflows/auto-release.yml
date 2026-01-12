@@ -36,8 +36,7 @@ jobs:
 
       - name: Créer l'archive ZIP
         run: |
-          FILE_NAME="auto-seo_v${{ steps.get_version.outputs.plugin_version }}.zip"
-          # On ajoute .idea/* à la liste des éléments à ignorer
+          FILE_NAME="auto_seo.zip"
           zip -r "$FILE_NAME" . -x "*.git*" ".github/*" ".idea/*"
           echo "zip_file=$FILE_NAME" >> $GITHUB_ENV
 
