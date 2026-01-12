@@ -8,6 +8,9 @@ Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour
 
 == Changelog ==
 
+= 1.0.3 =
+* [Amélioration] : Catégorie principale ajoutée dans la méta-description
+
 = 1.0.2 =
 * [Amélioration] : Réglages par défaut changés. (Automatisation lors de la publication -> Oui par défaut, pour les articles et les pages.)
 

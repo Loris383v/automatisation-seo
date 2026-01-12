@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.0.2
+ * Version: 1.0.3
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -353,6 +353,7 @@ add_action('wp_ajax_seo_process_item', function() {
     if (!$post) wp_send_json_error();
 
     $titre = get_the_title($post_id);
+    $categorie_principale = get_the_category()[0]->name;
     $desc_updated = false;
     $kw_updated = false;
 
@@ -362,9 +363,9 @@ add_action('wp_ajax_seo_process_item', function() {
     // Méta Description
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
     if ($overwrite_desc || empty($current_desc)) {
-        $excerpt = wp_trim_words($content, 15, '...');
+        $excerpt = wp_trim_words($content, 17, '...');
         if (!empty($excerpt)) {
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $excerpt");
+            update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $categorie_principale | $excerpt");
             $desc_updated = true;
         }
     }
