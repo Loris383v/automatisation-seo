@@ -17,6 +17,10 @@ Il est possible de filtrer pour modifier uniquement les articles appartenant à 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 == Changelog ==
 
+= 1.1.1 =
+* [Correctif] : Plugin impossible à activer
+* [Correctif] : Mise à jour renvoyant sur un mauvais plugin
+
 = 1.1.0 =
 * [Nouveau] : Ajout de la possibilité de mettre à jour directement depuis WordPress
 * [Amélioration] : Readme.txt un peu plus adapté pour WordPress

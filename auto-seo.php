@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.1.0
+ * Version: 1.1.1
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -14,18 +14,20 @@ if (!defined('ABSPATH')) exit;
 /**
  * Update checker
  */
-require 'plugin-update-checker/plugin-update-checker.php';
+
+require 'plugin-update-checker-5.6/plugin-update-checker.php';
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
 
 $myUpdateChecker = PucFactory::buildUpdateChecker(
-	'https://github.com/loris383v/automatisation-seo/',
-	__FILE__,
-	'auto-seo'
+    'https://github.com/loris383v/automatisation-seo/',
+    __FILE__,
+    'auto-yoast-seo'
 );
 
 $myUpdateChecker->getVcsApi()->enableReleaseAssets();
 //Set the branch that contains the stable release.
 $myUpdateChecker->setBranch('master');
+
 
 
 
