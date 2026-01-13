@@ -11,7 +11,25 @@
 
 if (!defined('ABSPATH')) exit;
 
-// Vérification de la dépendance à l'activation
+/**
+ * Update checker
+ */
+require 'plugin-update-checker/plugin-update-checker.php';
+use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
+
+$myUpdateChecker = PucFactory::buildUpdateChecker(
+	'https://github.com/loris383v/automatisation-seo/',
+	__FILE__,
+	'auto-seo'
+);
+
+$myUpdateChecker->getVcsApi()->enableReleaseAssets();
+//Set the branch that contains the stable release.
+$myUpdateChecker->setBranch('master');
+
+
+
+// Vérification de la dépendance à l'activation. Sert à rien mais bon rajoute une petite couche de sécurité en vrai.
 register_activation_hook(__FILE__, 'auto_seo_check_dependency');
 
 function auto_seo_check_dependency() {

@@ -1,12 +1,25 @@
+=== SEO Automatique ===
+Contributors: loris383
+Tags: seo,automatisation
+Tested up to: 6.9
+Stable tag: 1.0.3
+License: GPLv3
+License URI: https://www.gnu.org/licenses/gpl-3.0.html
+
+Générer automatiquement les données SEO de vos posts et pages.
+
+== Description ==
 Cette extension permet de générer automatiquement les méta-descriptions et les expressions clés de tous vos articles et pages!
 Elle prend le titre de l'article en tant qu'expression clé, et les 15 premiers mots de l'article pour la méta-description (pas encore configurable).
 
 Il est possible de filtrer pour modifier uniquement les articles appartenant à certaines catégories.
 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
-
-
 == Changelog ==
+
+= 1.1.0 =
+* [Nouveau] : Ajout de la possibilité de mettre à jour directement depuis WordPress
+* [Amélioration] : Readme.txt un peu plus adapté pour WordPress
 
 = 1.0.3 =
 * [Amélioration] : Catégorie principale ajoutée dans la méta-description
@@ -41,4 +54,4 @@ Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour
 * [Nouveau] : Remplis l'expression clé.
 
 = 0.1 =
-* Plugin fonctionnel, écris les méta-descriptions.
+* Plugin fonctionnel, écrit les méta-descriptions
