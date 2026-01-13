@@ -17,6 +17,9 @@ Il est possible de filtrer pour modifier uniquement les articles appartenant à 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 == Changelog ==
 
+= 1.2.1 =
+* [Correctif] : Erreur dans la page des réglages avec les valeurs quand elles n'étaient pas encore définies
+
 = 1.2.0 =
 * [Nouveau] : Longueur des champs configurables
 

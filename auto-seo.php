@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -105,16 +105,17 @@ function auto_seo_render_settings_page() {
         echo '<div class="updated"><p>Réglages mis à jour avec succès !</p></div>';
     }
 
-    $options = get_option('auto_seo_global_settings', [
-            'enabled' => 1,
-            'post_types' => ['post', 'page'],
-            'fill_desc' => 1,
-            'overwrite_desc' => 0,
-            'fill_kw' => 1,
-            'overwrite_kw' => 0,
-            'desc_length' => 15,
-            'kw_length' => 8
-    ]);
+    $defaults = [
+        'enabled' => 1,
+        'post_types' => ['post', 'page'],
+        'fill_desc' => 1,
+        'overwrite_desc' => 0,
+        'fill_kw' => 1,
+        'overwrite_kw' => 0,
+        'desc_length' => 15,
+        'kw_length' => 8
+    ];
+    $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
     ?>
     <div class="wrap">
         <h1>Réglages de l'automatisation</h1>
@@ -189,7 +190,17 @@ function auto_seo_render_settings_page() {
 add_action('wp_after_insert_post', 'auto_seo_after_save_trigger', 99, 3);
 function auto_seo_after_save_trigger($post_id, $post, $update) {
     if (wp_is_post_autosave($post_id) || wp_is_post_revision($post_id)) return;
-    $options = get_option('auto_seo_global_settings');
+    $defaults = [
+        'enabled' => 1,
+        'post_types' => ['post', 'page'],
+        'fill_desc' => 1,
+        'overwrite_desc' => 0,
+        'fill_kw' => 1,
+        'overwrite_kw' => 0,
+        'desc_length' => 15,
+        'kw_length' => 8
+    ];
+    $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
     if (!$options || empty($options['enabled'])) return;
     if (!in_array($post->post_type, (array)$options['post_types'])) return;
     if (in_array($post->post_status, ['auto-draft', 'inherit'])) return;
@@ -403,10 +414,11 @@ add_action('wp_ajax_seo_process_item', function() {
     $post = get_post($post_id);
     if (!$post) wp_send_json_error();
 
-    $options = get_option('auto_seo_global_settings', [
+    $defaults = [
         'desc_length' => 15,
         'kw_length' => 8
-    ]);
+    ];
+    $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
 
     $titre = get_the_title($post_id);
     $categorie_principale = get_the_category()[0]->name;
