@@ -2,7 +2,7 @@
 Contributors: loris383
 Tags: seo,automatisation
 Tested up to: 6.9
-Stable tag: 1.0.3
+Stable tag: 1.1.1
 License: GPLv3
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
@@ -16,6 +16,9 @@ Il est possible de filtrer pour modifier uniquement les articles appartenant à 
 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 == Changelog ==
+
+= 1.2.0 =
+* [Nouveau] : Longueur des champs configurables
 
 = 1.1.1 =
 * [Correctif] : Plugin impossible à activer

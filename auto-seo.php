@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.1.1
+ * Version: 1.2.0
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -97,6 +97,8 @@ function auto_seo_render_settings_page() {
                 'overwrite_desc' => isset($_POST['overwrite_desc']) ? 1 : 0,
                 'fill_kw'        => isset($_POST['fill_kw']) ? 1 : 0,
                 'overwrite_kw'   => isset($_POST['overwrite_kw']) ? 1 : 0,
+                'desc_length'    => intval($_POST['desc_length']) ?: 15,
+                'kw_length'      => intval($_POST['kw_length']) ?: 8,
         ];
 
         update_option('auto_seo_global_settings', $settings);
@@ -109,19 +111,23 @@ function auto_seo_render_settings_page() {
             'fill_desc' => 1,
             'overwrite_desc' => 0,
             'fill_kw' => 1,
-            'overwrite_kw' => 0
+            'overwrite_kw' => 0,
+            'desc_length' => 15,
+            'kw_length' => 8
     ]);
     ?>
     <div class="wrap">
         <h1>Réglages de l'automatisation</h1>
         <form method="post">
             <?php wp_nonce_field('auto_seo_settings_action'); ?>
+            <h2>Automatisation</h2>
             <table class="form-table">
                 <tr>
                     <th scope="row">Activer l'automatisation</th>
                     <td>
                         <label><input type="checkbox" name="enabled" value="1" <?php checked($options['enabled'], 1); ?>>
                             Générer les données SEO lors de la publication ou de l'enregistrement</label>
+                        <p class="description">Active ou désactive la génération automatique de données SEO lors de la sauvegarde des articles et pages.</p>
                     </td>
                 </tr>
                 <tr>
@@ -129,20 +135,45 @@ function auto_seo_render_settings_page() {
                     <td>
                         <label><input type="checkbox" name="post_types[]" value="post" <?php checked(in_array('post', (array)$options['post_types'])); ?>> Articles</label><br>
                         <label><input type="checkbox" name="post_types[]" value="page" <?php checked(in_array('page', (array)$options['post_types'])); ?>> Pages</label>
+                        <p class="description">Sélectionnez les types de contenu pour lesquels l'automatisation doit s'appliquer.</p>
                     </td>
                 </tr>
                 <tr>
                     <th scope="row">Méta description</th>
                     <td>
-                        <label><input type="checkbox" name="fill_desc" value="1" <?php checked($options['fill_desc'], 1); ?>> Remplir automatiquement</label><br>
+                        <label><input type="checkbox" name="fill_desc" value="1" <?php checked($options['fill_desc'], 1); ?>> Remplir automatiquement</label>
+                        <p class="description">Génère automatiquement la méta description à partir du titre et du contenu de l'article.</p>
+                        <br>
                         <label><input type="checkbox" name="overwrite_desc" value="1" <?php checked($options['overwrite_desc'], 1); ?>> Écraser si déjà rempli</label>
+                        <p class="description">Remplace la méta description existante même si elle a été remplie manuellement.</p>
                     </td>
                 </tr>
                 <tr>
                     <th scope="row">Expression clé</th>
                     <td>
-                        <label><input type="checkbox" name="fill_kw" value="1" <?php checked($options['fill_kw'], 1); ?>> Remplir automatiquement</label><br>
+                        <label><input type="checkbox" name="fill_kw" value="1" <?php checked($options['fill_kw'], 1); ?>> Remplir automatiquement</label>
+                        <p class="description">Génère automatiquement l'expression clé principale à partir du titre de l'article.</p>
+                        <br>
                         <label><input type="checkbox" name="overwrite_kw" value="1" <?php checked($options['overwrite_kw'], 1); ?>> Écraser si déjà rempli</label>
+                        <p class="description">Remplace l'expression clé existante même si elle a été remplie manuellement.</p>
+                    </td>
+                </tr>
+            </table>
+
+            <h2>Configuration du contenu</h2>
+            <table class="form-table">
+                <tr>
+                    <th scope="row">Nombre de mots pour la méta description</th>
+                    <td>
+                        <input type="number" name="desc_length" value="<?php echo esc_attr($options['desc_length']); ?>" min="1" max="50">
+                        <p class="description">Définit le nombre de mots extraits du contenu pour générer la méta description.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">Nombre de mots pour l'expression clé</th>
+                    <td>
+                        <input type="number" name="kw_length" value="<?php echo esc_attr($options['kw_length']); ?>" min="1" max="20">
+                        <p class="description">Définit le nombre de mots extraits du titre pour générer l'expression clé.</p>
                     </td>
                 </tr>
             </table>
@@ -169,7 +200,7 @@ function auto_seo_after_save_trigger($post_id, $post, $update) {
     if (!empty($options['fill_kw'])) {
         $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
         if ($options['overwrite_kw'] || empty($current_kw)) {
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, 8, ''));
+            update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, $options['kw_length'], ''));
         }
     }
 
@@ -178,7 +209,7 @@ function auto_seo_after_save_trigger($post_id, $post, $update) {
         if ($options['overwrite_desc'] || empty($current_desc)) {
             $content = strip_shortcodes($post->post_content);
             $content = wp_strip_all_tags($content);
-            $excerpt = wp_trim_words($content, 15, '...');
+            $excerpt = wp_trim_words($content, $options['desc_length'], '...');
             if (!empty($excerpt)) {
                 update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $excerpt");
             }
@@ -372,6 +403,11 @@ add_action('wp_ajax_seo_process_item', function() {
     $post = get_post($post_id);
     if (!$post) wp_send_json_error();
 
+    $options = get_option('auto_seo_global_settings', [
+        'desc_length' => 15,
+        'kw_length' => 8
+    ]);
+
     $titre = get_the_title($post_id);
     $categorie_principale = get_the_category()[0]->name;
     $desc_updated = false;
@@ -383,7 +419,7 @@ add_action('wp_ajax_seo_process_item', function() {
     // Méta Description
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
     if ($overwrite_desc || empty($current_desc)) {
-        $excerpt = wp_trim_words($content, 17, '...');
+        $excerpt = wp_trim_words($content, $options['desc_length'], '...');
         if (!empty($excerpt)) {
             update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $categorie_principale | $excerpt");
             $desc_updated = true;
@@ -393,7 +429,7 @@ add_action('wp_ajax_seo_process_item', function() {
     // Expression clé
     $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
     if ($overwrite_kw || empty($current_kw)) {
-        update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, 8, ''));
+        update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, $options['kw_length'], ''));
         $kw_updated = true;
     }
 
