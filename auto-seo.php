@@ -2,8 +2,8 @@
 /**
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
- * Description: Automatisation de la génération des méta-descriptions des articles pour Yoast.
- * Version: 1.2.1
+ * Description: Automatisation de la génération des méta-descriptions et mots-clés pour Yoast, avec IA gratuite.
+ * Version: 2.0
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -14,7 +14,6 @@ if (!defined('ABSPATH')) exit;
 /**
  * Update checker
  */
-
 require 'plugin-update-checker-5.6/plugin-update-checker.php';
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
 
@@ -28,9 +27,6 @@ $myUpdateChecker->getVcsApi()->enableReleaseAssets();
 //Set the branch that contains the stable release.
 $myUpdateChecker->setBranch('master');
 
-
-
-
 // Vérification de la dépendance à l'activation. Sert à rien mais bon rajoute une petite couche de sécurité en vrai.
 register_activation_hook(__FILE__, 'auto_seo_check_dependency');
 
@@ -39,6 +35,30 @@ function auto_seo_check_dependency() {
         deactivate_plugins(plugin_basename(__FILE__));
         wp_die("Ce plugin nécessite l'activation du plugin Yoast SEO pour fonctionner");
     }
+}
+
+/**
+ * Securité pour la clé API
+ */
+function auto_seo_encrypt($data) {
+    if (empty($data)) return '';
+    $key = defined('AUTH_KEY') ? AUTH_KEY : 'default_secret_salt_fallback';
+    $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length('aes-256-cbc'));
+    $encrypted = openssl_encrypt($data, 'aes-256-cbc', $key, 0, $iv);
+    // On stocke l'IV avec le texte chiffré séparé par ::
+    return base64_encode($encrypted . '::' . $iv);
+}
+
+function auto_seo_decrypt($data) {
+    if (empty($data)) return '';
+
+    $key = defined('AUTH_KEY') ? AUTH_KEY : 'default_secret_salt_fallback';
+    $decoded = base64_decode($data);
+    
+    if (strpos($decoded, '::') === false) return $data; // Fallback sécu
+
+    list($encrypted_data, $iv) = explode('::', $decoded, 2);
+    return openssl_decrypt($encrypted_data, 'aes-256-cbc', $key, 0, $iv);
 }
 
 /**
@@ -84,11 +104,91 @@ add_action('admin_menu', function() {
 });
 
 /**
+ * Fonction d'appel à l'API Groq
+ */
+function auto_seo_call_ai($title, $content, $api_key) {
+    if (empty($api_key)) {
+        return new WP_Error('missing_key', 'Clé API Groq manquante.');
+    }
+
+    // On limite le contenu envoyé pour éviter de dépasser les tokens ou ralentir inutilement
+    $content_sample = mb_substr($content, 0, 3000) . '...';
+
+    $prompt = "Tu es un expert SEO. Analyse le titre et le contenu ci-dessous.
+    Génère un objet JSON strict contenant deux clés :
+    1. 'focuskw' : L'expression clé principale la plus pertinente (quelques mots). N'en fournis qu'une seule.
+    2. 'metadesc' : Une méta-description accrocheuse, optimisée pour le clic, de moins de 155 caractères.
+    
+    Titre : $title
+    Contenu : $content_sample
+    
+    Réponds UNIQUEMENT le JSON, rien d'autre.";
+
+    $body = [
+        'model' => 'llama-3.1-8b-instant', // rapide et limite api élevée
+        'messages' => [
+            ['role' => 'system', 'content' => 'Tu es un assistant SEO. Tu ne parles que JSON.'],
+            ['role' => 'user', 'content' => $prompt]
+        ],
+        'temperature' => 0.5,
+        'response_format' => ['type' => 'json_object']
+    ];
+
+    $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $api_key,
+            'Content-Type'  => 'application/json',
+        ],
+        'body'    => json_encode($body),
+        'timeout' => 20
+    ]);
+
+    if (is_wp_error($response)) {
+        return $response;
+    }
+
+    $response_code = wp_remote_retrieve_response_code($response);
+    $response_body = wp_remote_retrieve_body($response);
+
+    if ($response_code !== 200) {
+        $error_msg = "Erreur API ($response_code)";
+        if ($response_code === 401) $error_msg = "Clé API invalide.";
+        if ($response_code === 429) $error_msg = "Limite de taux (Rate limit) atteinte.";
+        
+        // Tentative de lire le message d'erreur
+        $json_error = json_decode($response_body, true);
+        if (isset($json_error['error']['message'])) {
+            $error_msg .= " : " . $json_error['error']['message'];
+        }
+        
+        return new WP_Error('api_error', $error_msg);
+    }
+
+    $data = json_decode($response_body, true);
+    if (!isset($data['choices'][0]['message']['content'])) {
+        return new WP_Error('format_error', 'La réponse de l\'IA est malformée');
+    }
+
+    $ai_content = json_decode($data['choices'][0]['message']['content'], true);
+    
+    if (json_last_error() !== JSON_ERROR_NONE || !isset($ai_content['focuskw']) || !isset($ai_content['metadesc'])) {
+        return new WP_Error('json_parse_error', 'L\'IA n\'a pas renvoyé un JSON valide.');
+    }
+
+    return $ai_content;
+}
+
+/**
  * Page de Réglages
  */
 function auto_seo_render_settings_page() {
     if (isset($_POST['auto_seo_save_settings'])) {
         check_admin_referer('auto_seo_settings_action');
+
+        // Récupération de la clé brute
+        $raw_key = sanitize_text_field($_POST['groq_api_key']);
+        // Chiffrement avant stockage
+        $encrypted_key = auto_seo_encrypt($raw_key);
 
         $settings = [
                 'enabled'        => isset($_POST['enabled']) ? 1 : 0,
@@ -99,6 +199,8 @@ function auto_seo_render_settings_page() {
                 'overwrite_kw'   => isset($_POST['overwrite_kw']) ? 1 : 0,
                 'desc_length'    => intval($_POST['desc_length']) ?: 15,
                 'kw_length'      => intval($_POST['kw_length']) ?: 8,
+                'groq_api_key'   => $encrypted_key,
+                'enable_ai'      => isset($_POST['enable_ai']) ? 1 : 0,
         ];
 
         update_option('auto_seo_global_settings', $settings);
@@ -113,22 +215,50 @@ function auto_seo_render_settings_page() {
         'fill_kw' => 1,
         'overwrite_kw' => 0,
         'desc_length' => 15,
-        'kw_length' => 8
+        'kw_length' => 8,
+        'groq_api_key' => '',
+        'enable_ai' => 0
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
+    
+    // Déchiffrement pour affichage dans l'input
+    $display_key = auto_seo_decrypt($options['groq_api_key']);
     ?>
     <div class="wrap">
         <h1>Réglages de l'automatisation</h1>
         <form method="post">
             <?php wp_nonce_field('auto_seo_settings_action'); ?>
-            <h2>Automatisation</h2>
+            
+            <h2>Intelligence Artificielle</h2>
+            <div style="background: #f0f6fc; padding: 15px; border: 1px solid #c5d9ed; border-radius: 5px;">
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th scope="row">Clé API Groq</th>
+                        <td>
+                            <input type="password" name="groq_api_key" value="<?php echo esc_attr($display_key); ?>" class="regular-text" placeholder="gsk_...">
+                            <p class="description">Entrez votre clé API Groq.<a href="https://console.groq.com/keys" target="_blank">Obtenir une clé ici</a>.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Activer l'IA par défaut</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="enable_ai" value="1" <?php checked($options['enable_ai'], 1); ?>>
+                                Utiliser l'IA pour générer les champs lors de la sauvegarde automatique/publication.
+                            </label>
+                            <p class="description">Si désactivé (ou en cas d'erreur), l'algorithme classique (découpage de texte) sera utilisé.</p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <h2>Automatisation classique</h2>
             <table class="form-table">
                 <tr>
                     <th scope="row">Activer l'automatisation</th>
                     <td>
                         <label><input type="checkbox" name="enabled" value="1" <?php checked($options['enabled'], 1); ?>>
                             Générer les données SEO lors de la publication ou de l'enregistrement</label>
-                        <p class="description">Active ou désactive la génération automatique de données SEO lors de la sauvegarde des articles et pages.</p>
                     </td>
                 </tr>
                 <tr>
@@ -136,45 +266,37 @@ function auto_seo_render_settings_page() {
                     <td>
                         <label><input type="checkbox" name="post_types[]" value="post" <?php checked(in_array('post', (array)$options['post_types'])); ?>> Articles</label><br>
                         <label><input type="checkbox" name="post_types[]" value="page" <?php checked(in_array('page', (array)$options['post_types'])); ?>> Pages</label>
-                        <p class="description">Sélectionnez les types de contenu pour lesquels l'automatisation doit s'appliquer.</p>
                     </td>
                 </tr>
                 <tr>
                     <th scope="row">Méta description</th>
                     <td>
-                        <label><input type="checkbox" name="fill_desc" value="1" <?php checked($options['fill_desc'], 1); ?>> Remplir automatiquement</label>
-                        <p class="description">Génère automatiquement la méta description à partir du titre et du contenu de l'article.</p>
-                        <br>
+                        <label><input type="checkbox" name="fill_desc" value="1" <?php checked($options['fill_desc'], 1); ?>> Remplir automatiquement</label><br>
                         <label><input type="checkbox" name="overwrite_desc" value="1" <?php checked($options['overwrite_desc'], 1); ?>> Écraser si déjà rempli</label>
-                        <p class="description">Remplace la méta description existante même si elle a été remplie manuellement.</p>
                     </td>
                 </tr>
                 <tr>
                     <th scope="row">Expression clé</th>
                     <td>
-                        <label><input type="checkbox" name="fill_kw" value="1" <?php checked($options['fill_kw'], 1); ?>> Remplir automatiquement</label>
-                        <p class="description">Génère automatiquement l'expression clé principale à partir du titre de l'article.</p>
-                        <br>
+                        <label><input type="checkbox" name="fill_kw" value="1" <?php checked($options['fill_kw'], 1); ?>> Remplir automatiquement</label><br>
                         <label><input type="checkbox" name="overwrite_kw" value="1" <?php checked($options['overwrite_kw'], 1); ?>> Écraser si déjà rempli</label>
-                        <p class="description">Remplace l'expression clé existante même si elle a été remplie manuellement.</p>
                     </td>
                 </tr>
             </table>
 
-            <h2>Configuration du contenu</h2>
+            <h2>Configuration du contenu (Mode classique / Fallback)</h2>
+            <p class="description">Ces réglages s'appliquent si l'IA n'est pas utilisée ou si elle échoue.</p>
             <table class="form-table">
                 <tr>
-                    <th scope="row">Nombre de mots pour la méta description</th>
+                    <th scope="row">Longueur méta description (mots)</th>
                     <td>
                         <input type="number" name="desc_length" value="<?php echo esc_attr($options['desc_length']); ?>" min="1" max="50">
-                        <p class="description">Définit le nombre de mots extraits du contenu pour générer la méta description.</p>
                     </td>
                 </tr>
                 <tr>
-                    <th scope="row">Nombre de mots pour l'expression clé</th>
+                    <th scope="row">Longueur expression clé (mots)</th>
                     <td>
                         <input type="number" name="kw_length" value="<?php echo esc_attr($options['kw_length']); ?>" min="1" max="20">
-                        <p class="description">Définit le nombre de mots extraits du titre pour générer l'expression clé.</p>
                     </td>
                 </tr>
             </table>
@@ -190,6 +312,7 @@ function auto_seo_render_settings_page() {
 add_action('wp_after_insert_post', 'auto_seo_after_save_trigger', 99, 3);
 function auto_seo_after_save_trigger($post_id, $post, $update) {
     if (wp_is_post_autosave($post_id) || wp_is_post_revision($post_id)) return;
+    
     $defaults = [
         'enabled' => 1,
         'post_types' => ['post', 'page'],
@@ -198,9 +321,12 @@ function auto_seo_after_save_trigger($post_id, $post, $update) {
         'fill_kw' => 1,
         'overwrite_kw' => 0,
         'desc_length' => 15,
-        'kw_length' => 8
+        'kw_length' => 8,
+        'groq_api_key' => '',
+        'enable_ai' => 0
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
+    
     if (!$options || empty($options['enabled'])) return;
     if (!in_array($post->post_type, (array)$options['post_types'])) return;
     if (in_array($post->post_status, ['auto-draft', 'inherit'])) return;
@@ -208,21 +334,49 @@ function auto_seo_after_save_trigger($post_id, $post, $update) {
     $titre = $post->post_title;
     if (empty($titre)) return;
 
+    // Déchiffrement de la clé api
+    $api_key = auto_seo_decrypt($options['groq_api_key']);
+
+    // est-ce qu'on doit utiliser l'IA
+    $use_ai = (!empty($options['enable_ai']) && !empty($api_key));
+    $ai_data = null;
+
+    // Pré-récupération IA si activé
+    if ($use_ai && (!empty($options['fill_kw']) || !empty($options['fill_desc']))) {
+        $ai_result = auto_seo_call_ai($titre, $post->post_content, $api_key);
+        if (!is_wp_error($ai_result)) {
+            $ai_data = $ai_result;
+        }
+        // si erreur IA, ai_data reste null
+    }
+
+    // Traitement expression cle
     if (!empty($options['fill_kw'])) {
         $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
         if ($options['overwrite_kw'] || empty($current_kw)) {
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, $options['kw_length'], ''));
+            $new_kw = ($ai_data) ? $ai_data['focuskw'] : wp_trim_words($titre, $options['kw_length'], '');
+            update_post_meta($post_id, '_yoast_wpseo_focuskw', $new_kw);
         }
     }
 
+    // Traitement meta desc
     if (!empty($options['fill_desc'])) {
         $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
         if ($options['overwrite_desc'] || empty($current_desc)) {
-            $content = strip_shortcodes($post->post_content);
-            $content = wp_strip_all_tags($content);
-            $excerpt = wp_trim_words($content, $options['desc_length'], '...');
-            if (!empty($excerpt)) {
-                update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $excerpt");
+            if ($ai_data) {
+                update_post_meta($post_id, '_yoast_wpseo_metadesc', $ai_data['metadesc']);
+            } else {
+                //classique
+                $content = strip_shortcodes($post->post_content);
+                $content = wp_strip_all_tags($content);
+                $excerpt = wp_trim_words($content, $options['desc_length'], '...');
+                $categorie_principale = get_the_category($post_id)[0]->name ?? '';
+                if (!empty($excerpt)) {
+                    $meta_val = "$titre";
+                    if ($categorie_principale) $meta_val .= " | $categorie_principale";
+                    $meta_val .= " | $excerpt";
+                    update_post_meta($post_id, '_yoast_wpseo_metadesc', "$meta_val");
+                }
             }
         }
     }
@@ -236,6 +390,10 @@ function auto_seo_render_page() {
     if (!function_exists('wp_terms_checklist')) {
         require_once ABSPATH . 'wp-admin/includes/template.php';
     }
+    
+    // Récupérer la clé api pour vérifier
+    $options = get_option('auto_seo_global_settings', []);
+    $has_api_key = !empty($options['groq_api_key']); // même chiffrée, juste savoir si elle est là
     ?>
     <div class="wrap">
         <h1>Optimisation de masse</h1>
@@ -275,6 +433,17 @@ function auto_seo_render_page() {
                 <h3>Options</h3>
                 <p><label><input type="checkbox" id="overwrite-desc"> Écraser la méta description</label></p>
                 <p><label><input type="checkbox" id="overwrite-kw"> Écraser l'expression clé</label></p>
+                <hr>
+                <h3>Intelligence Artificielle</h3>
+                <p>
+                    <label style="<?php echo $has_api_key ? '' : 'color: #888; cursor: not-allowed;'; ?>" title="<?php echo $has_api_key ? '' : 'Veuillez configurer la clé API Groq dans les réglages.'; ?>">
+                        <input type="checkbox" id="use-ai" <?php echo $has_api_key ? '' : 'disabled'; ?>> 
+                        <strong>Générer avec l'IA</strong>
+                    </label>
+                </p>
+                <?php if(!$has_api_key): ?>
+                    <p class="description" style="color: #d63638;">Clé API manquante. <a href="admin.php?page=auto-seo-settings">Configurer</a></p>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -285,6 +454,7 @@ function auto_seo_render_page() {
         <div id="seo-log" style="display:none; background: #e7f7ed; border: 1px solid #46b450; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
             <h3 style="margin-top:0;">Résultat de l'optimisation</h3>
             <div id="log-summary"></div>
+            <div id="error-log" style="margin-top:10px; color:#d63638; display:none;"></div>
         </div>
         <button id="start-btn" class="button button-primary button-large">Lancer l'optimisation</button>
     </div>
@@ -294,10 +464,10 @@ function auto_seo_render_page() {
     </style>
     <script>
         jQuery(document).ready(function($) {
-            // Stats détaillées par type
             let stats = {
                 post: { checked: 0, updated: 0, desc: 0, kw: 0 },
-                page: { checked: 0, updated: 0, desc: 0, kw: 0 }
+                page: { checked: 0, updated: 0, desc: 0, kw: 0 },
+                errors: []
             };
 
             $('#toggle-whitelist').change(function() { $('#whitelist-container').slideToggle($(this).is(':checked')); });
@@ -308,6 +478,8 @@ function auto_seo_render_page() {
                 const $btn = $(this);
                 const overwriteDesc = $('#overwrite-desc').is(':checked');
                 const overwriteKW = $('#overwrite-kw').is(':checked');
+                const useAI = $('#use-ai').is(':checked');
+                
                 let postTypes = [];
                 if ($('#process-posts').is(':checked')) postTypes.push('post');
                 if ($('#process-pages').is(':checked')) postTypes.push('page');
@@ -320,11 +492,12 @@ function auto_seo_render_page() {
 
                 $btn.prop('disabled', true).text('Recherche...');
                 $('#seo-log').hide();
+                $('#error-log').empty().hide();
 
-                // Reset stats
                 stats = {
                     post: { checked: 0, updated: 0, desc: 0, kw: 0 },
-                    page: { checked: 0, updated: 0, desc: 0, kw: 0 }
+                    page: { checked: 0, updated: 0, desc: 0, kw: 0 },
+                    errors: []
                 };
 
                 $.post(ajaxurl, {
@@ -338,13 +511,16 @@ function auto_seo_render_page() {
                         let ids = res.data;
                         let total = ids.length;
                         $('#total').text(total);
-                        if(total > 0) { $btn.text('Traitement en cours...'); processNext(ids, 0, total, overwriteDesc, overwriteKW); }
+                        if(total > 0) { 
+                            $btn.text('Traitement en cours...'); 
+                            processNext(ids, 0, total, overwriteDesc, overwriteKW, useAI); 
+                        }
                         else { $btn.prop('disabled', false).text('Aucun contenu trouvé'); }
                     }
                 });
             });
 
-            function processNext(ids, index, total, overwriteDesc, overwriteKW) {
+            function processNext(ids, index, total, overwriteDesc, overwriteKW, useAI) {
                 if(index >= total) {
                     $('#start-btn').prop('disabled', false).text('Recommencer');
 
@@ -363,6 +539,16 @@ function auto_seo_render_page() {
                     });
 
                     $('#log-summary').html(summaryHtml);
+                    
+                    if (stats.errors.length > 0) {
+                        let errorHtml = '<strong>Alertes et Erreurs :</strong><ul>';
+                        stats.errors.forEach(err => {
+                            errorHtml += '<li>ID ' + err.id + ' : ' + err.msg + '</li>';
+                        });
+                        errorHtml += '</ul>';
+                        $('#error-log').html(errorHtml).show();
+                    }
+
                     $('#seo-log').fadeIn();
                     return;
                 }
@@ -371,6 +557,7 @@ function auto_seo_render_page() {
                     post_id: ids[index],
                     overwrite_desc: overwriteDesc,
                     overwrite_kw: overwriteKW,
+                    use_ai: useAI,
                     security: '<?php echo $nonce; ?>'
                 }, function(res) {
                     if(res.success) {
@@ -379,12 +566,24 @@ function auto_seo_render_page() {
                         if(res.data.desc_updated) stats[type].desc++;
                         if(res.data.kw_updated) stats[type].kw++;
                         if(res.data.desc_updated || res.data.kw_updated) stats[type].updated++;
+                        
+                        // Gestion erreurs/warnings (non bloquantes car fallback)
+                        if(res.data.error) {
+                            stats.errors.push({id: ids[index], msg: '<span style="color:#e67e22;">' + res.data.error + '</span> (Fait en mode classique)'});
+                        }
+                    } else {
+                        // Erreur bloquante ou retour false
+                        stats.errors.push({id: ids[index], msg: res.data ? res.data : 'Erreur inconnue'});
                     }
+                    
                     let current = index + 1;
                     let percent = Math.round((current / total) * 100);
                     $('#seo-bar-fill').css('width', percent+'%').text(percent+'%');
                     $('#current').text(current);
-                    processNext(ids, current, total, overwriteDesc, overwriteKW);
+                    processNext(ids, current, total, overwriteDesc, overwriteKW, useAI);
+                }).fail(function() {
+                    stats.errors.push({id: ids[index], msg: 'Erreur serveur/réseau'});
+                    processNext(ids, index + 1, total, overwriteDesc, overwriteKW, useAI);
                 });
             }
         });
@@ -411,43 +610,95 @@ add_action('wp_ajax_seo_process_item', function() {
     $post_id = intval($_POST['post_id']);
     $overwrite_desc = $_POST['overwrite_desc'] === 'true';
     $overwrite_kw = $_POST['overwrite_kw'] === 'true';
+    $use_ai = $_POST['use_ai'] === 'true';
+    
     $post = get_post($post_id);
-    if (!$post) wp_send_json_error();
+    if (!$post) wp_send_json_error('Post introuvable');
 
     $defaults = [
         'desc_length' => 15,
-        'kw_length' => 8
+        'kw_length' => 8,
+        'groq_api_key' => ''
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
 
     $titre = get_the_title($post_id);
-    $categorie_principale = get_the_category()[0]->name;
     $desc_updated = false;
     $kw_updated = false;
+    $error_msg = null;
 
-    $content = strip_shortcodes($post->post_content);
-    $content = wp_strip_all_tags($content);
-
-    // Méta Description
+    // Vérifier si on a besoin de mettre à jour quelque chose avant de faire des calculs
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
-    if ($overwrite_desc || empty($current_desc)) {
-        $excerpt = wp_trim_words($content, $options['desc_length'], '...');
-        if (!empty($excerpt)) {
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', "$titre | $categorie_principale | $excerpt");
+    $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
+    
+    $needs_desc = ($overwrite_desc || empty($current_desc));
+    $needs_kw = ($overwrite_kw || empty($current_kw));
+
+    if (!$needs_desc && !$needs_kw) {
+        wp_send_json_success([
+            'desc_updated' => false,
+            'kw_updated'   => false,
+            'post_type'    => $post->post_type
+        ]);
+    }
+
+    $ai_data = null;
+    $api_key = auto_seo_decrypt($options['groq_api_key']);
+
+    // Logique IA
+    if ($use_ai && !empty($api_key)) {
+        $ai_response = auto_seo_call_ai($titre, $post->post_content, $api_key);
+        
+        if (is_wp_error($ai_response)) {
+            // Enregistrement de l'erreur pour le rapport, mais on continue
+            $error_msg = $ai_response->get_error_message();
+            $ai_data = null; 
+        } else {
+            $ai_data = $ai_response;
+        }
+    }
+
+    // Mise à jour (Soit IA, soit classique)
+    
+    // Méta Description
+    if ($needs_desc) {
+        if ($ai_data) {
+            update_post_meta($post_id, '_yoast_wpseo_metadesc', $ai_data['metadesc']);
             $desc_updated = true;
+        } else {
+            //classique
+            $content = strip_shortcodes($post->post_content);
+            $content = wp_strip_all_tags($content);
+            $excerpt = wp_trim_words($content, $options['desc_length'], '...');
+            $categorie_principale = get_the_category($post_id)[0]->name ?? '';
+            
+            if (!empty($excerpt)) {
+                $meta_val = "$titre";
+                if ($categorie_principale) $meta_val .= " | $categorie_principale";
+                $meta_val .= " | $excerpt";
+                
+                update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta_val);
+                $desc_updated = true;
+            }
         }
     }
 
     // Expression clé
-    $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
-    if ($overwrite_kw || empty($current_kw)) {
-        update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, $options['kw_length'], ''));
-        $kw_updated = true;
+    if ($needs_kw) {
+        if ($ai_data) {
+            update_post_meta($post_id, '_yoast_wpseo_focuskw', $ai_data['focuskw']);
+            $kw_updated = true;
+        } else {
+            // Classique
+            update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, $options['kw_length'], ''));
+            $kw_updated = true;
+        }
     }
 
     wp_send_json_success([
             'desc_updated' => $desc_updated,
             'kw_updated'   => $kw_updated,
-            'post_type'    => $post->post_type
+            'post_type'    => $post->post_type,
+            'error'        => $error_msg
     ]);
 });
