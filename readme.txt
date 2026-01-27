@@ -17,6 +17,9 @@ Il est possible de filtrer pour modifier uniquement les articles appartenant à 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 == Changelog ==
 
+= 2.0.1 =
+* [**Amélioration**] : Meilleure gestion des limites de taux. IA en masse à éviter sur des gros sites en attendant une prochaine mise à jour, car il faut encore rester sur la page.
+
 = 2.0.0 =
 * [**Nouveau**] : Support génération gratuite par IA des balises. Support encore très limité pour l'optimisation de masse à cause des limites de taux, sera corrigé dans une prochaine mise-à-jour
 
