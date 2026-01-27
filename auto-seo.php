@@ -134,22 +134,47 @@ function auto_seo_call_ai($title, $content, $api_key) {
         'response_format' => ['type' => 'json_object']
     ];
 
-    $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
-        'headers' => [
-            'Authorization' => 'Bearer ' . $api_key,
-            'Content-Type'  => 'application/json',
-        ],
-        'body'    => json_encode($body),
-        'timeout' => 20
-    ]);
+    $max_attempts = 60; // eh au moins on est sur de gérer les tpm
+    $attempts = 0;
+    $warning_msg = '';
 
-    if (is_wp_error($response)) {
-        return $response;
-    }
+    do {
+        $attempts++;
+        $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $api_key,
+                'Content-Type'  => 'application/json',
+            ],
+            'body'    => json_encode($body),
+            'timeout' => 30 // Augmenté un peu au cas où
+        ]);
 
-    $response_code = wp_remote_retrieve_response_code($response);
-    $response_body = wp_remote_retrieve_body($response);
+        if (is_wp_error($response)) {
+            return $response;
+        }
 
+        $response_code = wp_remote_retrieve_response_code($response);
+        $response_body = wp_remote_retrieve_body($response);
+        
+        // Gestion du Rate Limit (429) avec Retry-After
+        if ($response_code === 429 && $attempts < $max_attempts) {
+            $retry_after = wp_remote_retrieve_header($response, 'retry-after');
+            // Si pas de header, on attend 5s par défaut, sinon le temps indiqué
+            $wait_time = $retry_after ? intval($retry_after) : 5;
+            
+            // On prépare le message pour l'utilisateur
+            $warning_msg = "Limite de taux atteinte. Pause de {$wait_time}s effectuée avant réessai.";
+            
+            // On dort le temps nécessaire
+            sleep($wait_time);
+            continue; // On recommence la boucle
+        }
+
+        // Si ce n'est pas une 429 ou si on a épuisé les essais, on sort de la boucle
+        break;
+
+    } while ($attempts < $max_attempts);
+    
     if ($response_code !== 200) {
         $error_msg = "Erreur API ($response_code)";
         if ($response_code === 401) $error_msg = "Clé API invalide.";
@@ -173,6 +198,11 @@ function auto_seo_call_ai($title, $content, $api_key) {
     
     if (json_last_error() !== JSON_ERROR_NONE || !isset($ai_content['focuskw']) || !isset($ai_content['metadesc'])) {
         return new WP_Error('json_parse_error', 'L\'IA n\'a pas renvoyé un JSON valide.');
+    }
+
+    // On ajoute le warning s'il existe
+    if (!empty($warning_msg)) {
+        $ai_content['warning'] = $warning_msg;
     }
 
     return $ai_content;
@@ -264,8 +294,8 @@ function auto_seo_render_settings_page() {
                 <tr>
                     <th scope="row">Types de contenu</th>
                     <td>
-                        <label><input type="checkbox" name="post_types[]" value="post" <?php checked(in_array('post', (array)$options['post_types'])); ?>> Articles</label><br>
-                        <label><input type="checkbox" name="post_types[]" value="page" <?php checked(in_array('page', (array)$options['post_types'])); ?>> Pages</label>
+                    <label><input type="checkbox" name="post_types[]" value="post" <?php checked(in_array('post', (array)$options['post_types'])); ?>> Articles</label><br>
+                    <label><input type="checkbox" name="post_types[]" value="page" <?php checked(in_array('page', (array)$options['post_types'])); ?>> Pages</label>
                     </td>
                 </tr>
                 <tr>
@@ -284,7 +314,7 @@ function auto_seo_render_settings_page() {
                 </tr>
             </table>
 
-            <h2>Configuration du contenu (Mode classique / Fallback)</h2>
+            <h2>Configuration du contenu (Mode classique)</h2>
             <p class="description">Ces réglages s'appliquent si l'IA n'est pas utilisée ou si elle échoue.</p>
             <table class="form-table">
                 <tr>
@@ -327,7 +357,7 @@ function auto_seo_after_save_trigger($post_id, $post, $update) {
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
     
-    if (!$options || empty($options['enabled'])) return;
+    if (!$options['enabled']) return;
     if (!in_array($post->post_type, (array)$options['post_types'])) return;
     if (in_array($post->post_status, ['auto-draft', 'inherit'])) return;
 
@@ -335,13 +365,12 @@ function auto_seo_after_save_trigger($post_id, $post, $update) {
     if (empty($titre)) return;
 
     // Déchiffrement de la clé api
-    $api_key = auto_seo_decrypt($options['groq_api_key']);
+    $api_key = auto_seo_decrypt($options['groq_api_key'] ?? '');
 
     // est-ce qu'on doit utiliser l'IA
     $use_ai = (!empty($options['enable_ai']) && !empty($api_key));
     $ai_data = null;
 
-    // Pré-récupération IA si activé
     if ($use_ai && (!empty($options['fill_kw']) || !empty($options['fill_desc']))) {
         $ai_result = auto_seo_call_ai($titre, $post->post_content, $api_key);
         if (!is_wp_error($ai_result)) {
@@ -437,16 +466,16 @@ function auto_seo_render_page() {
                 <h3>Intelligence Artificielle</h3>
                 <p>
                     <label style="<?php echo $has_api_key ? '' : 'color: #888; cursor: not-allowed;'; ?>" title="<?php echo $has_api_key ? '' : 'Veuillez configurer la clé API Groq dans les réglages.'; ?>">
-                        <input type="checkbox" id="use-ai" <?php echo $has_api_key ? '' : 'disabled'; ?>> 
-                        <strong>Générer avec l'IA</strong>
-                    </label>
-                </p>
+                    <input type="checkbox" id="use-ai" <?php echo $has_api_key ? '' : 'disabled'; ?>> 
+                    <strong>Générer avec l'IA</strong>
+                </label>
+            </p>
                 <?php if(!$has_api_key): ?>
                     <p class="description" style="color: #d63638;">Clé API manquante. <a href="admin.php?page=auto-seo-settings">Configurer</a></p>
                 <?php endif; ?>
             </div>
         </div>
-
+        
         <div id="seo-bar-container" style="width:100%; background:#ddd; border-radius:10px; overflow:hidden; margin:20px 0;">
             <div id="seo-bar-fill" style="width:0%; height:30px; background:#2271b1; color:white; text-align:center; line-height:30px; transition: width 0.3s;">0%</div>
         </div>
@@ -566,8 +595,13 @@ function auto_seo_render_page() {
                         if(res.data.desc_updated) stats[type].desc++;
                         if(res.data.kw_updated) stats[type].kw++;
                         if(res.data.desc_updated || res.data.kw_updated) stats[type].updated++;
-                        
-                        // Gestion erreurs/warnings (non bloquantes car fallback)
+
+                        // Gestion des warnings (succès IA mais avec un message, ex: rate limit retry)
+                        if(res.data.warning) {
+                            stats.errors.push({id: ids[index], msg: '<span style="color:#2271b1;">' + res.data.warning + '</span>'});
+                        }
+
+                        // Gestion erreurs/warnings (fallback mode classique)
                         if(res.data.error) {
                             stats.errors.push({id: ids[index], msg: '<span style="color:#e67e22;">' + res.data.error + '</span> (Fait en mode classique)'});
                         }
@@ -626,6 +660,7 @@ add_action('wp_ajax_seo_process_item', function() {
     $desc_updated = false;
     $kw_updated = false;
     $error_msg = null;
+    $warning_msg = null;
 
     // Vérifier si on a besoin de mettre à jour quelque chose avant de faire des calculs
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
@@ -655,6 +690,9 @@ add_action('wp_ajax_seo_process_item', function() {
             $ai_data = null; 
         } else {
             $ai_data = $ai_response;
+            if (isset($ai_data['warning'])) {
+                $warning_msg = $ai_data['warning'];
+            }
         }
     }
 
@@ -699,6 +737,7 @@ add_action('wp_ajax_seo_process_item', function() {
             'desc_updated' => $desc_updated,
             'kw_updated'   => $kw_updated,
             'post_type'    => $post->post_type,
-            'error'        => $error_msg
+            'error'        => $error_msg,
+            'warning'      => $warning_msg
     ]);
 });
