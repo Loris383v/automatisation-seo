@@ -2,8 +2,8 @@
 /**
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
- * Description: Automatisation de la génération des méta-descriptions et mots-clés pour Yoast, avec IA gratuite.
- * Version: 2.0.2
+ * Description: Automatisation de la génération des méta-descriptions et mots-clés pour Yoast, avec IA gratuite. Supporte le traitement en arrière-plan.
+ * Version: 2.1.0
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -37,6 +37,32 @@ function auto_seo_check_dependency()
         deactivate_plugins(plugin_basename(__FILE__));
         wp_die("Ce plugin nécessite l'activation du plugin Yoast SEO pour fonctionner");
     }
+}
+
+/**
+ * Logs
+ */
+function auto_seo_log($message)
+{
+    $upload_dir = wp_upload_dir();
+    $file = $upload_dir['basedir'] . '/auto-seo-logs.log';
+    $date = date('d-m-Y H:i:s');
+    file_put_contents($file, "[$date] $message" . PHP_EOL, FILE_APPEND);
+}
+
+function auto_seo_get_log_content()
+{
+    $upload_dir = wp_upload_dir();
+    $file = $upload_dir['basedir'] . '/auto-seo-logs.log';
+    if (file_exists($file)) {
+        // Limite à 20ko pour éviter de crasher si le fichier fait 441220go
+        // Si ça fait lagger alors on descendra un peu
+        $content = file_get_contents($file);
+        if (strlen($content) > 20000)
+            return "..." . substr($content, -20000);
+        return $content;
+    }
+    return '';
 }
 
 /**
@@ -82,38 +108,38 @@ add_filter('plugin_action_links_' . plugin_basename(__FILE__), function ($links)
  */
 add_action('admin_menu', function() {
     add_menu_page(
-            'SEO Automatique',
-            'Auto SEO',
-            'manage_options',
-            'auto-seo',
-            'auto_seo_render_page',
-            'dashicons-chart-line',
-            26
+        'SEO Automatique',
+        'Auto SEO',
+        'manage_options',
+        'auto-seo',
+        'auto_seo_render_page',
+        'dashicons-chart-line',
+        26
     );
 
     add_submenu_page(
-            'auto-seo',
-            'Optimiser',
-            'Optimiser',
-            'manage_options',
-            'auto-seo',
-            'auto_seo_render_page'
+        'auto-seo',
+        'Optimiser',
+        'Optimiser',
+        'manage_options',
+        'auto-seo',
+        'auto_seo_render_page'
     );
 
     add_submenu_page(
-            'auto-seo',
-            'Réglages',
-            'Réglages',
-            'manage_options',
-            'auto-seo-settings',
-            'auto_seo_render_settings_page'
+        'auto-seo',
+        'Réglages',
+        'Réglages',
+        'manage_options',
+        'auto-seo-settings',
+        'auto_seo_render_settings_page'
     );
 });
 
 /**
  * Fonction d'appel à l'API Groq
  */
-function auto_seo_call_ai($title, $content, $api_key, $retry_on_429 = true)
+function auto_seo_call_ai($title, $content, $api_key)
 {
     if (empty($api_key)) {
         return new WP_Error('missing_key', 'Clé API Groq manquante.');
@@ -142,62 +168,32 @@ function auto_seo_call_ai($title, $content, $api_key, $retry_on_429 = true)
         'response_format' => ['type' => 'json_object']
     ];
 
-    $max_attempts = $retry_on_429 ? 3 : 1;
-    $attempts = 0;
+    // Un seul essai ici, c'est le cron qui gère les trucs
+    $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $api_key,
+            'Content-Type' => 'application/json',
+        ],
+        'body' => json_encode($body),
+        'timeout' => 30
+    ]);
 
-    do {
-        $attempts++;
-        $response = wp_remote_post('https://api.groq.com/openai/v1/chat/completions', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $api_key,
-                'Content-Type' => 'application/json',
-            ],
-            'body' => json_encode($body),
-            'timeout' => 30
-        ]);
+    if (is_wp_error($response)) {
+        return $response;
+    }
 
-        if (is_wp_error($response)) {
-            return $response;
-        }
+    $response_code = wp_remote_retrieve_response_code($response);
+    $response_code_int = intval($response_code); // Conversion explicite pour éviter les erreurs de type
 
-        $response_code = wp_remote_retrieve_response_code($response);
-        $response_code_int = intval($response_code); // Conversion explicite pour éviter les erreurs de type
-
-        // Gestion du Rate Limit (429)
-        if ($response_code_int === 429) {
-            $retry_after = wp_remote_retrieve_header($response, 'retry-after');
-            $wait_time = $retry_after ? intval($retry_after) : 5;
-
-            if ($retry_on_429 && $attempts < $max_attempts) {
-                // Mode serveur (silencieux) : on attend ici
-                sleep($wait_time);
-                continue;
-            } elseif (!$retry_on_429) {
-                // Mode interactif (JS) : on renvoie l'info immédiatement
-                return new WP_Error('rate_limit', 'Limite de taux atteinte', ['retry_after' => $wait_time]);
-            }
-        }
-
-        break; // On sort si succès ou autre erreur
-
-    } while ($attempts < $max_attempts);
-
-    $response_code_int = intval(wp_remote_retrieve_response_code($response));
+    // Gestion du Rate Limit (429)
+    if ($response_code_int === 429) {
+        $retry_after = wp_remote_retrieve_header($response, 'retry-after');
+        $wait_time = $retry_after ? intval($retry_after) : 60;
+        return new WP_Error('rate_limit', 'Limite de taux atteinte', ['retry_after' => $wait_time]);
+    }
 
     if ($response_code_int !== 200) {
-        $error_msg = "Erreur API ($response_code_int)";
-        if ($response_code_int === 401)
-            $error_msg = "Clé API invalide.";
-        if ($response_code_int === 429)
-            $error_msg = "Limite de taux (Rate limit) atteinte.";
-
-        $response_body = wp_remote_retrieve_body($response);
-        $json_error = json_decode($response_body, true);
-        if (isset($json_error['error']['message'])) {
-            $error_msg .= " : " . $json_error['error']['message'];
-        }
-
-        return new WP_Error('api_error', $error_msg);
+        return new WP_Error('api_error', "Erreur API ($response_code_int)");
     }
 
     $response_body = wp_remote_retrieve_body($response);
@@ -215,6 +211,85 @@ function auto_seo_call_ai($title, $content, $api_key, $retry_on_429 = true)
 
     return $ai_content;
 }
+
+/**
+ * Traitement regroupé pour ne plus avoir à modifier 2 fonctions différentes à chaque fois. Depuis le temps qu'il fallait que je le fasse ça...
+ */
+function auto_seo_process_single_post($post_id, $opts)
+{
+    $post = get_post($post_id);
+    if (!$post)
+        return "Post $post_id introuvable.";
+
+    $titre = get_the_title($post_id);
+    $api_key = auto_seo_decrypt($opts['groq_api_key'] ?? '');
+
+    // verifs existantes
+    $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
+    $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
+
+    $needs_desc = (!empty($opts['overwrite_desc']) || empty($current_desc)) && !empty($opts['fill_desc']);
+    $needs_kw = (!empty($opts['overwrite_kw']) || empty($current_kw)) && !empty($opts['fill_kw']);
+
+    if (!$needs_desc && !$needs_kw) {
+        return "Ignoré (vide ou déjà rempli)";
+    }
+
+    $ai_data = null;
+    $method = "Classique";
+
+    // Tentative IA
+    if (!empty($opts['use_ai']) && !empty($api_key)) {
+        $ai_result = auto_seo_call_ai($titre, $post->post_content, $api_key);
+
+        if (is_wp_error($ai_result)) {
+            if ($ai_result->get_error_code() === 'rate_limit') {
+                return $ai_result; // On remonte l'erreur bloquante au planificateur
+            }
+            // sinon on log l'erreur et on passe en classique
+            if (function_exists('auto_seo_log')) {
+                auto_seo_log("Erreur IA sur ID $post_id : " . $ai_result->get_error_message());
+            }
+        } else {
+            $ai_data = $ai_result;
+            $method = "IA";
+        }
+    }
+
+    $res_log = [];
+
+    // Méta description
+    if ($needs_desc) {
+        if ($ai_data) {
+            update_post_meta($post_id, '_yoast_wpseo_metadesc', $ai_data['metadesc']);
+        } else {
+            // classqieu
+            $content = strip_shortcodes($post->post_content);
+            $content = wp_strip_all_tags($content);
+            $excerpt = wp_trim_words($content, $opts['desc_length'] ?? 15, '...');
+            $categorie_principale = get_the_category($post_id)[0]->name ?? '';
+
+            $meta_val = "$titre";
+            if ($categorie_principale)
+                $meta_val .= " | $categorie_principale";
+            if (!empty($excerpt))
+                $meta_val .= " | $excerpt";
+
+            update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta_val);
+        }
+        $res_log[] = "Description";
+    }
+
+    // Mot clé
+    if ($needs_kw) {
+        $kw = ($ai_data) ? $ai_data['focuskw'] : wp_trim_words($titre, $opts['kw_length'] ?? 8, '');
+        update_post_meta($post_id, '_yoast_wpseo_focuskw', $kw);
+        $res_log[] = "Expression clé";
+    }
+
+    return "OK ($method) : " . implode(' & ', $res_log);
+}
+
 
 /**
  * Page de Réglages
@@ -256,7 +331,7 @@ function auto_seo_render_settings_page()
         'enable_ai' => 0
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
-    
+
     // Déchiffrement pour affichage dans l'input
     $display_key = auto_seo_decrypt($options['groq_api_key']);
     ?>
@@ -374,56 +449,76 @@ function auto_seo_after_save_trigger($post_id, $post, $update)
 
     if (!$options['enabled'])
         return;
-    if (!in_array($post->post_type, (array) $options['post_types']))
+    if (!in_array($post->post_type, (array) ($options['post_types'] ?? [])))
         return;
     if (in_array($post->post_status, ['auto-draft', 'inherit']))
         return;
 
-    $titre = $post->post_title;
-    if (empty($titre))
+    // oui
+    $run_opts = [
+        'fill_desc' => !empty($options['fill_desc']),
+        'overwrite_desc' => !empty($options['overwrite_desc']),
+        'fill_kw' => !empty($options['fill_kw']),
+        'overwrite_kw' => !empty($options['overwrite_kw']),
+        'desc_length' => $options['desc_length'] ?? 15,
+        'kw_length' => $options['kw_length'] ?? 8,
+        'groq_api_key' => $options['groq_api_key'],
+        'use_ai' => !empty($options['enable_ai'])
+    ];
+
+    // Appel synchrone (pas de cron ici, c'est une sauvegarde manuelle)
+    auto_seo_process_single_post($post_id, $run_opts);
+}
+
+/**
+ * traitement en arrirèe plan
+ */
+add_action('auto_seo_cron_event', 'auto_seo_run_batch');
+function auto_seo_run_batch()
+{
+    $queue = get_option('auto_seo_queue', []);
+    $opts = get_option('auto_seo_batch_options', []);
+
+    if (empty($queue)) {
+        update_option('auto_seo_status', 'finished');
+        auto_seo_log("--- TERMINÉ ---");
         return;
+    }
 
-    $api_key = auto_seo_decrypt($options['groq_api_key'] ?? '');
-    $use_ai = (!empty($options['enable_ai']) && !empty($api_key));
-    $ai_data = null;
+    // 1 si IA pour gérer les rate limit, 5 sinon
+    $batch_size = !empty($opts['use_ai']) ? 1 : 5;
+    $current_batch = array_slice($queue, 0, $batch_size);
 
-    if ($use_ai && (!empty($options['fill_kw']) || !empty($options['fill_desc']))) {
-        // Retry actif pour la sauvegarde automatique (silencieux)
-        $ai_result = auto_seo_call_ai($titre, $post->post_content, $api_key, true);
-        if (!is_wp_error($ai_result)) {
-            $ai_data = $ai_result;
+    foreach ($current_batch as $post_id) {
+        $result = auto_seo_process_single_post($post_id, $opts);
+
+        if (is_wp_error($result) && $result->get_error_code() === 'rate_limit') {
+            $wait = $result->get_error_data()['retry_after'] + 5; // Marge de sécu
+            auto_seo_log("LIMITE IA SUR (ID $post_id). Pause de $wait secondes...");
+            wp_schedule_single_event(time() + $wait, 'auto_seo_cron_event');
+            return; // STOP complet du script p
+        }
+
+        $msg = is_wp_error($result) ? $result->get_error_message() : $result;
+        auto_seo_log("ID $post_id : $msg");
+
+        // Retrait de la file d'attente
+        $queue = get_option('auto_seo_queue', []);
+        if (($key = array_search($post_id, $queue)) !== false) {
+            unset($queue[$key]);
+            $queue = array_values($queue);
+            update_option('auto_seo_queue', $queue);
+            update_option('auto_seo_processed', (int) get_option('auto_seo_processed', 0) + 1);
         }
     }
 
-    // Expression clé
-    if (!empty($options['fill_kw'])) {
-        $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
-        if ($options['overwrite_kw'] || empty($current_kw)) {
-            $new_kw = ($ai_data) ? $ai_data['focuskw'] : wp_trim_words($titre, $options['kw_length'], '');
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', $new_kw);
-        }
-    }
-
-    // Meta desc
-    if (!empty($options['fill_desc'])) {
-        $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
-        if ($options['overwrite_desc'] || empty($current_desc)) {
-            if ($ai_data) {
-                update_post_meta($post_id, '_yoast_wpseo_metadesc', $ai_data['metadesc']);
-            } else {
-                $content = strip_shortcodes($post->post_content);
-                $content = wp_strip_all_tags($content);
-                $excerpt = wp_trim_words($content, $options['desc_length'], '...');
-                $categorie_principale = get_the_category($post_id)[0]->name ?? '';
-                if (!empty($excerpt)) {
-                    $meta_val = "$titre";
-                    if ($categorie_principale)
-                        $meta_val .= " | $categorie_principale";
-                    $meta_val .= " | $excerpt";
-                    update_post_meta($post_id, '_yoast_wpseo_metadesc', "$meta_val");
-                }
-            }
-        }
+    if (!empty($queue)) {
+        // Petite pause si IA, on est pas à ça près et dans tous les cas on finira par se prendre un 429
+        $delay = !empty($opts['use_ai']) ? 2 : 0;
+        wp_schedule_single_event(time() + $delay, 'auto_seo_cron_event');
+    } else {
+        update_option('auto_seo_status', 'finished');
+        auto_seo_log("--- TERMINÉ ---");
     }
 }
 
@@ -442,6 +537,8 @@ function auto_seo_render_page()
     ?>
     <div class="wrap">
         <h1>Optimisation de masse</h1>
+        
+        <!-- Filtrage et options -->
         <div style="display: flex; gap: 20px; margin-bottom: 20px;">
             <div style="flex: 1; background: #fff; padding: 20px; border: 1px solid #ccd0d4; border-radius: 5px;">
                 <h3>Filtrage des catégories</h3>
@@ -496,346 +593,191 @@ function auto_seo_render_page()
                     <p class="description" style="color: #d63638;">Clé API manquante. <a
                             href="admin.php?page=auto-seo-settings">Configurer</a></p>
                 <?php endif; ?>
+                
+                <div style="margin-top:20px;">
+                    <button id="start-btn" class="button button-primary button-large" style="width:100%">Lancer l'optimisation</button>
+                    <button id="stop-btn" class="button button-secondary" style="width:100%; margin-top:10px; color:#d63638;">Arrêt</button>
+                </div>
             </div>
         </div>
 
-        <div id="seo-bar-container"
-            style="width:100%; background:#ddd; border-radius:10px; overflow:hidden; margin:20px 0;">
-            <div id="seo-bar-fill"
-                style="width:0%; height:30px; background:#2271b1; color:white; text-align:center; line-height:30px; transition: width 0.3s;">
-                0%</div>
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <p id="seo-stats">Progression : <span id="current">0</span> / <span id="total">0</span></p>
-            <div id="live-status-msg" style="font-weight:bold;"></div>
-        </div>
+        <!-- Logs et Status Serveur -->
+        <div id="server-monitor" style="margin-top:20px;">
+            <h3>État du serveur</h3>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div style="font-weight:bold; font-size:1.1em;">
+                    Progression : <span id="current">0</span> / <span id="total">0</span>
+                    <span id="status-badge" style="margin-left:10px; padding:3px 8px; border-radius:3px; font-size:12px; background:#eee;">EN ATTENTE</span>
+                </div>
+            </div>
 
-        <div id="live-log-container"
-            style="background: #f9f9f9; border: 1px solid #ccc; padding: 10px; height: 150px; overflow-y: scroll; margin-bottom: 20px; display:none;">
-            <strong>Journal en direct :</strong>
-            <ul id="live-log-list" style="margin: 0; padding-left: 15px;"></ul>
-        </div>
+            <div id="seo-bar-container" style="width:100%; background:#ddd; border-radius:10px; overflow:hidden; margin-bottom:10px;">
+                <div id="seo-bar-fill" style="width:0%; height:30px; background:#2271b1; color:white; text-align:center; line-height:30px; transition: width 0.3s;">0%</div>
+            </div>
 
-        <div id="seo-log"
-            style="display:none; background: #e7f7ed; border: 1px solid #46b450; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
-            <h3 style="margin-top:0;">Résultat final de l'optimisation</h3>
-            <div id="log-summary"></div>
-            <div id="error-log" style="margin-top:10px; color:#d63638; display:none;"></div>
+            <div id="live-log-container"
+                style="background: #23282d; color: #0f0; border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: scroll; font-family: monospace;">
+                <div id="live-log-list">En attente de démarrage...</div>
+            </div>
         </div>
-        <button id="start-btn" class="button button-primary button-large">Lancer l'optimisation</button>
     </div>
+    
     <style>
-        .cat-list-wrapper {
-            max-height: 200px;
-            overflow-y: auto;
-            background: #f9f9f9;
-            padding: 10px;
-            border: 1px solid #ddd;
-            margin-top: 10px;
-        }
-
-        .cat-list-wrapper ul {
-            margin-left: 20px;
-        }
+        .cat-list-wrapper { max-height: 200px; overflow-y: auto; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; margin-top: 10px; }
+        .cat-list-wrapper ul { margin-left: 20px; }
     </style>
+
     <script>
         jQuery(document).ready(function ($) {
-            let stats = {
-                post: { checked: 0, updated: 0, desc: 0, kw: 0 },
-                page: { checked: 0, updated: 0, desc: 0, kw: 0 },
-                errors: []
-            };
-
+            // -- Gestion UI --
             $('#toggle-whitelist').change(function () { $('#whitelist-container').slideToggle($(this).is(':checked')); });
             $('#toggle-blacklist').change(function () { $('#blacklist-container').slideToggle($(this).is(':checked')); });
             $('.select-all').click(function () { $('#' + $(this).data('target') + ' input[type="checkbox"]').prop('checked', true); });
 
-            function logLine(msg) {
-                $('#live-log-list').prepend('<li>' + msg + '</li>');
+            // -- Polling Serveur --
+            function refreshStatus() {
+                $.post(ajaxurl, {action: 'seo_get_status'}, function(res) {
+                    if(res.success) {
+                        let d = res.data;
+                        // Logs
+                        $('#live-log-list').html('<pre style="white-space:pre-wrap; margin:0">'+d.logs+'</pre>');
+                        let logContainer = document.getElementById('live-log-container');
+                        logContainer.scrollTop = logContainer.scrollHeight;
+
+                        // Bar
+                        let pct = d.total > 0 ? Math.round((d.processed / d.total) * 100) : 0;
+                        $('#seo-bar-fill').css('width', pct + '%').text(pct + '%');
+                        $('#current').text(d.processed);
+                        $('#total').text(d.total);
+
+                        // Badge et Boutons
+                        let statusLabel = d.status === 'running' ? 'EN COURS (SERVEUR)' : (d.status === 'finished' ? 'TERMINÉ' : 'EN ATTENTE');
+                        let color = d.status === 'running' ? '#e5f5fa' : (d.status === 'finished' ? '#dff0d8' : '#eee');
+                        $('#status-badge').text(statusLabel).css('background', color);
+
+                        if (d.status === 'running') {
+                            $('#start-btn').prop('disabled', true).text('Traitement en cours...');
+                        } else {
+                            $('#start-btn').prop('disabled', false).text('Lancer l\'optimisation');
+                        }
+                    }
+                });
             }
+            setInterval(refreshStatus, 3000);
+            refreshStatus();
 
+            // -- Actions --
             $('#start-btn').click(function () {
-                const $btn = $(this);
-                const overwriteDesc = $('#overwrite-desc').is(':checked');
-                const overwriteKW = $('#overwrite-kw').is(':checked');
-                const useAI = $('#use-ai').is(':checked');
+                if(!confirm("Lancer le traitement en arrière-plan ? Cela peut peut prendre plusieurs jours sur un gros site si l'IA est activée.")) return;
 
+                const $btn = $(this);
                 let postTypes = [];
                 if ($('#process-posts').is(':checked')) postTypes.push('post');
                 if ($('#process-pages').is(':checked')) postTypes.push('page');
                 if (postTypes.length === 0) { alert('Sélectionnez au moins un type de contenu !'); return; }
 
+                // Récupération Whitelist / Blacklist depuis les inputs wp
                 let whitelist = [];
                 if ($('#toggle-whitelist').is(':checked')) { $('#whitelist-checklist input:checked').each(function () { whitelist.push($(this).val()); }); }
                 let blacklist = [];
                 if ($('#toggle-blacklist').is(':checked')) { $('#blacklist-checklist input:checked').each(function () { blacklist.push($(this).val()); }); }
 
-                $btn.prop('disabled', true).text('Recherche...');
-                $('#seo-log').hide();
-                $('#error-log').empty().hide();
-                $('#live-log-container').show();
-                $('#live-log-list').empty();
-                $('#live-status-msg').text('');
-
-                stats = {
-                    post: { checked: 0, updated: 0, desc: 0, kw: 0 },
-                    page: { checked: 0, updated: 0, desc: 0, kw: 0 },
-                    errors: []
-                };
+                $btn.prop('disabled', true).text('Lancement...');
 
                 $.post(ajaxurl, {
-                    action: 'seo_get_ids',
+                    action: 'seo_start_background',
                     post_types: postTypes,
                     whitelist: whitelist,
                     blacklist: blacklist,
+                    overwrite_desc: $('#overwrite-desc').is(':checked'),
+                    overwrite_kw: $('#overwrite-kw').is(':checked'),
+                    use_ai: $('#use-ai').is(':checked'),
                     security: '<?php echo $nonce; ?>'
                 }, function (res) {
                     if (res.success) {
-                        let ids = res.data;
-                        let total = ids.length;
-                        $('#total').text(total);
-                        if (total > 0) {
-                            $btn.text('Traitement en cours...');
-                            processNext(ids, 0, total, overwriteDesc, overwriteKW, useAI);
-                        }
-                        else {
-                            $btn.prop('disabled', false).text('Aucun contenu trouvé');
-                            logLine('Aucun article trouvé avec ces critères.');
-                        }
+                        alert(res.data.message);
+                        refreshStatus();
+                    } else {
+                        alert('Erreur : ' + res.data);
+                        $btn.prop('disabled', false).text('Lancer l\'optimisation');
                     }
                 });
             });
 
-            function processNext(ids, index, total, overwriteDesc, overwriteKW, useAI) {
-                if (index >= total) {
-                    $('#start-btn').prop('disabled', false).text('Recommencer');
-                    $('#live-status-msg').text('Traitement terminé !').css('color', 'green');
-
-                    let summaryHtml = '<p><strong>' + total + ' éléments vérifiés.</strong></p>';
-
-                    ['post', 'page'].forEach(type => {
-                        if (stats[type].checked > 0) {
-                            let label = (type === 'post') ? 'Articles' : 'Pages';
-                            summaryHtml += '<div style="margin-top:10px;">';
-                            summaryHtml += '<strong>' + label + ' : ' + stats[type].updated + '/' + stats[type].checked + ' mis à jour</strong>';
-                            summaryHtml += '<ul style="margin: 5px 0 0 20px; list-style: disc;">';
-                            summaryHtml += '<li>' + stats[type].desc + ' méta descriptions écrites</li>';
-                            summaryHtml += '<li>' + stats[type].kw + ' expression clés écrites</li>';
-                            summaryHtml += '</ul></div>';
-                        }
-                    });
-
-                    $('#log-summary').html(summaryHtml);
-
-                    if (stats.errors.length > 0) {
-                        let errorHtml = '<strong>Erreurs rencontrées :</strong><ul>';
-                        stats.errors.forEach(err => {
-                            errorHtml += '<li>ID ' + err.id + ' : ' + err.msg + '</li>';
-                        });
-                        errorHtml += '</ul>';
-                        $('#error-log').html(errorHtml).show();
-                    }
-
-                    $('#seo-log').fadeIn();
-                    return;
+            $('#stop-btn').click(function() {
+                if(confirm("Arrêter l'optimisation ?")) {
+                    $.post(ajaxurl, {action: 'seo_stop_process'}, function() { refreshStatus(); });
                 }
-
-                $('#live-status-msg').text('Traitement de l\'ID ' + ids[index] + '...').css('color', '#2271b1');
-
-                $.post(ajaxurl, {
-                    action: 'seo_process_item',
-                    post_id: ids[index],
-                    overwrite_desc: overwriteDesc,
-                    overwrite_kw: overwriteKW,
-                    use_ai: useAI,
-                    security: '<?php echo $nonce; ?>'
-                }, function (res) {
-                    // Gestion spéciale Rate Limit
-                    if (res.success && res.data.status === 'rate_limit') {
-                        let wait = res.data.retry_after;
-                        $('#live-status-msg').html('<span style="color:#d63638">Limite de taux atteinte. Pause de sécurité de ' + wait + ' secondes...</span>');
-                        logLine('<span style="color:#d63638">[PAUSE] ID ' + ids[index] + ' : Limite de taux atteinte. Attente de ' + wait + ' secondes.</span>');
-
-                        setTimeout(function () {
-                            processNext(ids, index, total, overwriteDesc, overwriteKW, useAI);
-                        }, wait * 1000);
-                        return;
-                    }
-
-                    if (res.success) {
-                        const type = res.data.post_type;
-                        stats[type].checked++;
-                        let details = [];
-                        if (res.data.desc_updated) { stats[type].desc++; details.push('description'); }
-                        if (res.data.kw_updated) { stats[type].kw++; details.push('expression clé'); }
-
-                        if (res.data.desc_updated || res.data.kw_updated) {
-                            stats[type].updated++;
-                            let detailsStr = details.join(' et ');
-                            // Mettre en majuscule la première lettre
-                            detailsStr = detailsStr.charAt(0).toUpperCase() + detailsStr.slice(1);
-
-                            let logMsg = '<span style="color:green">[SUCCÈS]</span> ID ' + ids[index] + ' (' + (res.data.post_title || 'Sans titre') + ') : ' + detailsStr + ' mis à jour.';
-
-                            if (res.data.error) {
-                                stats.errors.push({ id: ids[index], msg: res.data.error + ' (Mode classique utilisé)' });
-                                logMsg += ' <span style="color:orange">(Génération classique utilisée car l\'IA a échoué)</span>';
-                            }
-                            logLine(logMsg);
-                        } else {
-                            logLine('<span style="color:gray">[IGNORÉ]</span> ID ' + ids[index] + ' (' + (res.data.post_title || 'Sans titre') + ') : Vide ou déjà optimisé.');
-                        }
-
-                    } else {
-                        // Erreur bloquante
-                        stats.errors.push({ id: ids[index], msg: res.data ? res.data : 'Erreur inconnue' });
-                        logLine('<span style="color:red">[ERREUR]</span> ID ' + ids[index] + ' : ' + (res.data ? res.data : 'Erreur inconnue'));
-                    }
-
-                    let current = index + 1;
-                    let percent = Math.round((current / total) * 100);
-                    $('#seo-bar-fill').css('width', percent + '%').text(percent + '%');
-                    $('#current').text(current);
-
-                    processNext(ids, current, total, overwriteDesc, overwriteKW, useAI);
-                }).fail(function () {
-                    stats.errors.push({ id: ids[index], msg: 'Erreur serveur ou réseau' });
-                    logLine('<span style="color:red">[ERREUR RÉSEAU]</span> ID ' + ids[index]);
-                    processNext(ids, index + 1, total, overwriteDesc, overwriteKW, useAI);
-                });
-            }
+            });
         });
     </script>
     <?php
 }
 
 /**
- * AJAX Callbacks
+ * AJAX
  */
-add_action('wp_ajax_seo_get_ids', function () {
+add_action('wp_ajax_seo_start_background', function() {
     check_ajax_referer('auto_seo_security_token', 'security');
-    if (!current_user_can('manage_options'))
-        wp_die();
-    $post_types = !empty($_POST['post_types']) ? array_map('sanitize_key', $_POST['post_types']) : ['post'];
-    $args = ['post_type' => $post_types, 'posts_per_page' => -1, 'fields' => 'ids', 'post_status' => 'any'];
-    if (!empty($_POST['whitelist']))
-        $args['category__in'] = array_map('intval', $_POST['whitelist']);
-    if (!empty($_POST['blacklist']))
-        $args['category__not_in'] = array_map('intval', $_POST['blacklist']);
-    wp_send_json_success(get_posts($args));
+    if (!current_user_can('manage_options')) wp_die();
+
+    // Reset Logs
+    $upload_dir = wp_upload_dir();
+    file_put_contents($upload_dir['basedir'] . '/auto-seo-logs.log', "--- DÉMARRAGE DU TRAITEMENT ---\n");
+
+    // Fetch IDs avec filtrage complet
+    $args = [
+        'post_type' => !empty($_POST['post_types']) ? $_POST['post_types'] : ['post'],
+        'fields' => 'ids',
+        'posts_per_page' => -1,
+        'post_status' => 'any'
+    ];
+    // Gestion Whitelist et Blacklist
+    if (!empty($_POST['whitelist'])) $args['category__in'] = array_map('intval', $_POST['whitelist']);
+    if (!empty($_POST['blacklist'])) $args['category__not_in'] = array_map('intval', $_POST['blacklist']);
+    
+    $ids = get_posts($args);
+    if (empty($ids)) wp_send_json_error("Aucun contenu trouvé avec ces critères.");
+
+    // Options Batch
+    $global = get_option('auto_seo_global_settings', []);
+    $opts = [
+        'groq_api_key' => $global['groq_api_key'] ?? '',
+        'use_ai' => $_POST['use_ai'] === 'true',
+        'overwrite_desc' => $_POST['overwrite_desc'] === 'true',
+        'overwrite_kw' => $_POST['overwrite_kw'] === 'true',
+        'fill_desc' => true, 
+        'fill_kw' => true,
+        'desc_length' => $global['desc_length'] ?? 15,
+        'kw_length' => $global['kw_length'] ?? 8,
+    ];
+
+    update_option('auto_seo_queue', $ids);
+    update_option('auto_seo_batch_options', $opts);
+    update_option('auto_seo_total', count($ids));
+    update_option('auto_seo_processed', 0);
+    update_option('auto_seo_status', 'running');
+
+    wp_schedule_single_event(time(), 'auto_seo_cron_event');
+    wp_send_json_success(['message' => "Lancé sur " . count($ids) . " éléments."]);
 });
 
-add_action('wp_ajax_seo_process_item', function () {
-    check_ajax_referer('auto_seo_security_token', 'security');
+add_action('wp_ajax_seo_get_status', function () {
     if (!current_user_can('manage_options'))
         wp_die();
-    $post_id = intval($_POST['post_id']);
-    $overwrite_desc = $_POST['overwrite_desc'] === 'true';
-    $overwrite_kw = $_POST['overwrite_kw'] === 'true';
-    $use_ai = $_POST['use_ai'] === 'true';
-
-    $post = get_post($post_id);
-    if (!$post)
-        wp_send_json_error('Post introuvable');
-
-    $defaults = [
-        'desc_length' => 15,
-        'kw_length' => 8,
-        'groq_api_key' => ''
-    ];
-    $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
-
-    $titre = get_the_title($post_id);
-    $desc_updated = false;
-    $kw_updated = false;
-    $error_msg = null;
-
-    $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
-    $current_kw = get_post_meta($post_id, '_yoast_wpseo_focuskw', true);
-
-    $needs_desc = ($overwrite_desc || empty($current_desc));
-    $needs_kw = ($overwrite_kw || empty($current_kw));
-
-    if (!$needs_desc && !$needs_kw) {
-        wp_send_json_success([
-            'desc_updated' => false,
-            'kw_updated' => false,
-            'post_type' => $post->post_type,
-            'post_title' => $titre
-        ]);
-    }
-
-    $ai_data = null;
-    $api_key = auto_seo_decrypt($options['groq_api_key']);
-
-    // Logique IA
-    if ($use_ai && !empty($api_key)) {
-        // false = ne pas pioncer côté serveur, renvoyer l'erreur au JS
-        $ai_response = auto_seo_call_ai($titre, $post->post_content, $api_key, false);
-
-        if (is_wp_error($ai_response)) {
-            // Si c'est un rate limit, on arrête et on prévient le JS
-            if ($ai_response->get_error_code() === 'rate_limit') {
-                $data = $ai_response->get_error_data();
-                wp_send_json_success([
-                    'status' => 'rate_limit',
-                    'retry_after' => $data['retry_after'] ?? 5,
-                    'post_id' => $post_id
-                ]);
-                return; // STOP
-            }
-
-            // Sinon (autre erreur), on loggue et on fallback
-            $error_msg = $ai_response->get_error_message();
-            $ai_data = null;
-        } else {
-            $ai_data = $ai_response;
-        }
-    }
-
-    // Mise à jour (Soit IA, soit classique)
-
-    // Méta Description
-    if ($needs_desc) {
-        if ($ai_data) {
-            update_post_meta($post_id, '_yoast_wpseo_metadesc', $ai_data['metadesc']);
-            $desc_updated = true;
-        } else {
-            //classique
-            $content = strip_shortcodes($post->post_content);
-            $content = wp_strip_all_tags($content);
-            $excerpt = wp_trim_words($content, $options['desc_length'], '...');
-            $categorie_principale = get_the_category($post_id)[0]->name ?? '';
-
-            if (!empty($excerpt)) {
-                $meta_val = "$titre";
-                if ($categorie_principale)
-                    $meta_val .= " | $categorie_principale";
-                $meta_val .= " | $excerpt";
-
-                update_post_meta($post_id, '_yoast_wpseo_metadesc', $meta_val);
-                $desc_updated = true;
-            }
-        }
-    }
-
-    // Expression clé
-    if ($needs_kw) {
-        if ($ai_data) {
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', $ai_data['focuskw']);
-            $kw_updated = true;
-        } else {
-            // Classique
-            update_post_meta($post_id, '_yoast_wpseo_focuskw', wp_trim_words($titre, $options['kw_length'], ''));
-            $kw_updated = true;
-        }
-    }
-
     wp_send_json_success([
-        'desc_updated' => $desc_updated,
-        'kw_updated' => $kw_updated,
-        'post_type' => $post->post_type,
-        'post_title' => $titre,
-        'error' => $error_msg
+        'status' => get_option('auto_seo_status', 'idle'),
+        'total' => (int) get_option('auto_seo_total', 0),
+        'processed' => (int) get_option('auto_seo_processed', 0),
+        'logs' => auto_seo_get_log_content()
     ]);
+});
+
+add_action('wp_ajax_seo_stop_process', function () {
+    if (!current_user_can('manage_options'))
+        wp_die();
+    update_option('auto_seo_queue', []);
+    update_option('auto_seo_status', 'finished');
+    auto_seo_log("--- ARRÊT FORCÉ ---");
+    wp_send_json_success();
 });
