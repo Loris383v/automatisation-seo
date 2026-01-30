@@ -16,6 +16,8 @@ Il est possible de filtrer pour modifier uniquement les articles appartenant à 
 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 == Changelog ==
+= 2.1.0 =
+* [**Nouveau/Amélioration**] : Traitement en arrière plan, permet notamment d'utiliser l'IA en masse, ce qui était impossible sur des gros sites avant (à moins de rester avec le navigateur ouvert pendant une semaine...).
 
 = 2.0.1 =
 * [**Amélioration**] : Meilleure gestion des limites de taux. IA en masse à éviter sur des gros sites en attendant une prochaine mise à jour, car il faut encore rester sur la page.
