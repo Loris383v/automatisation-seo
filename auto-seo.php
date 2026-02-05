@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions et mots-clés pour Yoast, avec IA gratuite. Supporte le traitement en arrière-plan.
- * Version: 2.1.1
+ * Version: 2.1.2
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -321,7 +321,7 @@ function auto_seo_render_settings_page()
             'kw_length' => intval($_POST['kw_length']) ?: 8,
             'groq_api_key' => $encrypted_key,
             'enable_ai' => isset($_POST['enable_ai']) ? 1 : 0,
-            'site_context' => isset($_POST['site_context']) ? sanitize_textarea_field($_POST['site_context']) : '',
+            'site_context' => isset($_POST['site_context']) ? sanitize_textarea_field(stripslashes($_POST['site_context'])) : '',
         ];
 
         update_option('auto_seo_global_settings', $settings);
