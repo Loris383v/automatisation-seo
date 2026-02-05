@@ -16,8 +16,11 @@ Il est possible de filtrer pour modifier uniquement les articles appartenant à 
 
 Les champs qui étaient déjà remplis ne seront par défaut pas modifiés, pour éviter d'écraser un travail manuel de meilleure qualité.
 == Changelog ==
+= 2.1.2 =
+* [**Correctif**] : Suppression des antislash qui apparaissaient de plus en plus devant les apostrophes à chaque enregistrement du contexte.
+
 = 2.1.1 =
-* [Amélioration] : Ajout d'un champ de contexte du site pour que l'IA fasse des descriptions plus adaptées.
+* [**Amélioration**] : Ajout d'un champ de contexte du site pour que l'IA fasse des descriptions plus adaptées.
 
 = 2.1.0 =
 * [**Nouveau/Amélioration**] : Traitement en arrière plan, permet notamment d'utiliser l'IA en masse, ce qui était impossible sur des gros sites avant (à moins de rester avec le navigateur ouvert pendant une semaine...).
