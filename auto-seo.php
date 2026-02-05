@@ -3,7 +3,7 @@
  * Plugin Name: SEO Automatique
  * Plugin URI: https://github.com/loris383v/automatisation-seo
  * Description: Automatisation de la génération des méta-descriptions et mots-clés pour Yoast, avec IA gratuite. Supporte le traitement en arrière-plan.
- * Version: 2.1.0
+ * Version: 2.1.1
  * Author: Loris Lacote
  * Author URI: https://github.com/loris383v
  * Requires Plugins: wordpress-seo
@@ -139,7 +139,7 @@ add_action('admin_menu', function() {
 /**
  * Fonction d'appel à l'API Groq
  */
-function auto_seo_call_ai($title, $content, $api_key)
+function auto_seo_call_ai($title, $content, $api_key, $site_context = '')
 {
     if (empty($api_key)) {
         return new WP_Error('missing_key', 'Clé API Groq manquante.');
@@ -148,7 +148,15 @@ function auto_seo_call_ai($title, $content, $api_key)
     // On limite le contenu envoyé pour éviter de dépasser les tokens ou ralentir inutilement
     $content_sample = mb_substr($content, 0, 3000) . '...';
 
+    // Injection du contexte si présent
+    $context_instruction = "";
+    if (!empty($site_context)) {
+        $context_instruction = "IMPORTANT - Contexte du site : \"$site_context\". Utilise ce contexte pour adapter le ton et la pertinence.";
+    }
+
     $prompt = "Tu es un expert SEO. Analyse le titre et le contenu ci-dessous.
+    $context_instruction
+    
     Génère un objet JSON strict contenant deux clés :
     1. 'focuskw' : L'expression clé principale la plus pertinente (quelques mots). N'en fournis qu'une seule.
     2. 'metadesc' : Une méta-description accrocheuse, optimisée pour le clic, de moins de 155 caractères.
@@ -159,7 +167,7 @@ function auto_seo_call_ai($title, $content, $api_key)
     Réponds UNIQUEMENT le JSON, rien d'autre.";
 
     $body = [
-        'model' => 'llama-3.1-8b-instant', // rapide et limite api élevée
+        'model' => 'meta-llama/llama-4-scout-17b-16e-instruct', //sinon llama-3.1-8b-instant avec la même limite quotidienne, mais une limite par minute plus faible et moins efficace
         'messages' => [
             ['role' => 'system', 'content' => 'Tu es un assistant SEO. Tu ne parles que JSON.'],
             ['role' => 'user', 'content' => $prompt]
@@ -223,6 +231,7 @@ function auto_seo_process_single_post($post_id, $opts)
 
     $titre = get_the_title($post_id);
     $api_key = auto_seo_decrypt($opts['groq_api_key'] ?? '');
+    $site_context = $opts['site_context'] ?? '';
 
     // verifs existantes
     $current_desc = get_post_meta($post_id, '_yoast_wpseo_metadesc', true);
@@ -240,7 +249,7 @@ function auto_seo_process_single_post($post_id, $opts)
 
     // Tentative IA
     if (!empty($opts['use_ai']) && !empty($api_key)) {
-        $ai_result = auto_seo_call_ai($titre, $post->post_content, $api_key);
+        $ai_result = auto_seo_call_ai($titre, $post->post_content, $api_key, $site_context);
 
         if (is_wp_error($ai_result)) {
             if ($ai_result->get_error_code() === 'rate_limit') {
@@ -312,6 +321,7 @@ function auto_seo_render_settings_page()
             'kw_length' => intval($_POST['kw_length']) ?: 8,
             'groq_api_key' => $encrypted_key,
             'enable_ai' => isset($_POST['enable_ai']) ? 1 : 0,
+            'site_context' => isset($_POST['site_context']) ? sanitize_textarea_field($_POST['site_context']) : '',
         ];
 
         update_option('auto_seo_global_settings', $settings);
@@ -328,7 +338,8 @@ function auto_seo_render_settings_page()
         'desc_length' => 15,
         'kw_length' => 8,
         'groq_api_key' => '',
-        'enable_ai' => 0
+        'enable_ai' => 0,
+        'site_context' => ''
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
 
@@ -350,6 +361,15 @@ function auto_seo_render_settings_page()
                                 class="regular-text" placeholder="gsk_...">
                             <p class="description">Entrez votre clé API Groq. <a href="https://console.groq.com/keys"
                                     target="_blank">Obtenir une clé ici</a>.</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">Contexte pour l'IA (Fortement recommandé)</th>
+                        <td>
+                            <p>Écrivez ici une courte description du site qui sera fournie à l'IA pour générer les descriptions</p>
+                            <textarea name="site_context" rows="3" width="100%" class="regular-text"><?php echo esc_textarea($options['site_context']); ?></textarea>
+                            <p class="description">Sans contexte, l'IA risque de faire des descriptions très inexactes sur des pages un peu génériques.
+                            </p>
                         </td>
                     </tr>
                     <tr>
@@ -443,7 +463,8 @@ function auto_seo_after_save_trigger($post_id, $post, $update)
         'desc_length' => 15,
         'kw_length' => 8,
         'groq_api_key' => '',
-        'enable_ai' => 0
+        'enable_ai' => 0,
+        'site_context' => '',
     ];
     $options = wp_parse_args(get_option('auto_seo_global_settings', []), $defaults);
 
@@ -463,7 +484,8 @@ function auto_seo_after_save_trigger($post_id, $post, $update)
         'desc_length' => $options['desc_length'] ?? 15,
         'kw_length' => $options['kw_length'] ?? 8,
         'groq_api_key' => $options['groq_api_key'],
-        'use_ai' => !empty($options['enable_ai'])
+        'use_ai' => !empty($options['enable_ai']),
+        'site_context' => $options['site_context']
     ];
 
     // Appel synchrone (pas de cron ici, c'est une sauvegarde manuelle)
@@ -750,6 +772,7 @@ add_action('wp_ajax_seo_start_background', function() {
         'fill_kw' => true,
         'desc_length' => $global['desc_length'] ?? 15,
         'kw_length' => $global['kw_length'] ?? 8,
+        'site_context' => $global['site_context'] ?? '',
     ];
 
     update_option('auto_seo_queue', $ids);
