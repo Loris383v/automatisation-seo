@@ -367,7 +367,7 @@ function auto_seo_render_settings_page()
                         <th scope="row">Contexte pour l'IA (Fortement recommandé)</th>
                         <td>
                             <p>Écrivez ici une courte description du site qui sera fournie à l'IA pour générer les descriptions</p>
-                            <input type="text" name="site_context" class="regular-text" value="<?php echo esc_attr($options['site_context']); ?>" style="width: 100%;">
+                            <textarea name="site_context" rows="3" width="100%" class="regular-text"><?php echo esc_textarea($options['site_context']); ?></textarea>
                             <p class="description">Sans contexte, l'IA risque de faire des descriptions très inexactes sur des pages un peu génériques.
                             </p>
                         </td>
